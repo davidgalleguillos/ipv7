@@ -9,6 +9,8 @@ jobs:
   build-and-release:
     name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     strategy:
       matrix:
         include:
@@ -38,12 +40,12 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --release --manifest-path ipv7/ipv7-core/Cargo.toml --target ${{ matrix.target }}
+          args: --release --manifest-path ipv7-core/Cargo.toml --target ${{ matrix.target }}
 
       - name: Formatear Nombre del Binario para Despliegue
         run: |
           mkdir out
-          cp ipv7/ipv7-core/target/${{ matrix.target }}/release/ipv7-core* out/${{ matrix.artifact_name }}
+          cp target/${{ matrix.target }}/release/ipv7-core* out/${{ matrix.artifact_name }} || cp ipv7-core/target/${{ matrix.target }}/release/ipv7-core* out/${{ matrix.artifact_name }}
         shell: bash
 
       - name: Subir Artifactos de IPv7 a GitHub Releases
