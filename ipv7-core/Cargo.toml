@@ -1,0 +1,42 @@
+[package]
+name = "ipv7-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Runtime asíncrono para concurrencia extrema
+tokio = { version = "1.40", features = ["full"] }
+
+# Criptografía
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+x25519-dalek = { version = "2.0", features = ["reusable_secrets"] }
+chacha20poly1305 = "0.10"
+rand_core = { version = "0.6", features = ["getrandom"] }
+
+# Tipos de datos serializables
+serde = { version = "1.0", features = ["derive"] }
+bincode = "1.3" # Serialización binaria rápida para paquetes
+zeroize = "1.8" # Para limpiar memoria de llaves privadas
+
+# Manejo de errores
+anyhow = "1.0"
+thiserror = "1.0"
+bs58 = "0.5.1"
+serde-big-array = "0.5.1"
+
+# Telemetría y Logs (Fase 4)
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Gobernanza e Interfaz (Fase 5)
+ratatui = "0.28"
+crossterm = "0.28"
+tun = { version = "0.8.6", features = ["async"] }
+
+# Perfiles de Optimización (Fase 11: Despliegue Masivo)
+[profile.release]
+opt-level = 3       # Máxima optimización de velocidad
+lto = "fat"         # Link-time optimization extrema (menor tamaño y más rápido)
+codegen-units = 1   # Mayor paralización a expensas de tiempo de compilación para máxima optimización
+panic = "abort"     # Se deshace del unwinding de pánico para reducir el tamaño del binario
+strip = true        # Quita los símbolos de depuración del binario final
