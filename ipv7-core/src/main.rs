@@ -1,5 +1,5 @@
 //! main.rs
-//! Demonio IPv7 Fase 2 (Enrutamiento UDP P2P Real y Escudo de Cascada)
+//! IPv7 Core v1.1.0 — Motor Soberano P2P con Bootstrap Multicapa, Kademlia DHT y Criptografía Real
 #![allow(dead_code)]
 
 mod config;
