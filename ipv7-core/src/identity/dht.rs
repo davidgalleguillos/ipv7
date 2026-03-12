@@ -3,9 +3,20 @@
 //! Mapea Identidades IPv7 (Llaves Públicas ED25519) a sus endpoints físicos (IP:Puerto).
 //! Utiliza métricas XOR concurrentes para el enrutamiento descentralizado.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+/// Estructura de Mensajes Orgánicos del protocolo de enrutamiento DHT.
+/// Sirven para NAT Punching (Ping/Pong) y para descubrimiento de topología (FindNode).
+#[derive(Serialize, Deserialize, Debug)]
+pub enum DhtPayload {
+    Ping,
+    Pong,
+    FindNode { target: [u8; 32] },
+    NodeList { peers: Vec<([u8; 32], String)> },
+}
 
 /// Calcula la distancia matemática XOR entre dos identidades IPv7
 pub fn xor_distance(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
@@ -43,6 +54,12 @@ impl DhtRegistry {
     pub async fn lookup(&self, pubkey: &[u8; 32]) -> Option<String> {
         let table = self.nodes.read().await;
         table.get(pubkey).cloned()
+    }
+
+    /// Obtiene los nodos más cercanos conocidos (simulados sacando todos por ahora)
+    pub async fn get_closest_peers(&self, _target: &[u8; 32]) -> Vec<([u8; 32], String)> {
+        let table = self.nodes.read().await;
+        table.iter().map(|(id, addr)| (*id, addr.clone())).take(10).collect()
     }
     
     /// Devuelve un volcado de la tabla para visualización administrativa en el TUI.

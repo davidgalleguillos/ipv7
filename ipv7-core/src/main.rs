@@ -9,7 +9,7 @@ mod telemetry;
 mod ui;
 
 use identity::keys::NodeIdentity;
-use identity::dht::DhtRegistry;
+use identity::dht::{DhtRegistry, DhtPayload};
 use transport::overlay::OverlayRelay;
 use transport::packet::Ipv7Packet;
 use transport::relay::RelayInstruction;
@@ -42,17 +42,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Configurar canal para enviar logs desde la asincronía al TUI
     let (tx, rx) = mpsc::channel::<TuiEvent>(100);
 
-    // SIMULACIÓN DHT (Phase 3 & 8)
-    // En el futuro, resolver "id://" a IP real usará Kademlia DHT.
+    // Kademlia DHT Real Orgánico (Phase 13)
     let dht = DhtRegistry::new(*my_node.address.as_bytes());
     let sessions = SessionManager::new();
-    let sim_dest_pubkey = [0x99; 32];
-    let sim_relay_pubkey = [0x88; 32]; // Nodo Intermedio
-
-    // Hardcodeo las rutas físicas para pruebas locales:
-    // El listener 1 tomará 60553 (Destino). El listener 2 tomará 60554 (Relay).
-    dht.register_node(sim_dest_pubkey, "127.0.0.1:60553".to_string()).await;
-    dht.register_node(sim_relay_pubkey, "127.0.0.1:60554".to_string()).await;
 
     if args[1] == "--listen" {
         // MODO NODO PASIVO (Esperando conexión)
@@ -81,8 +73,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if packet.verify_origin_signature() {
                                 let _ = tx_clone.send(TuiEvent::LogMsg("    [✓] Firma ED25519 de Origen AUTENTICADA.".to_string())).await;
                                 
+                                // AUTO-DESCUBRIMIENTO: Añadimos a quien sea que nos hable a nuestro Kademlia DHT (NAT Punching pasivo)
+                                dht_clone.register_node(packet.source_id, src.to_string()).await;
+                                
                                 // Evaluar qué tipo de Payload es
-                                if let Ok(hs_payload) = bincode::deserialize::<transport::handshake::HandshakePayload>(&packet.encrypted_payload) {
+                                if let Ok(dht_msg) = bincode::deserialize::<DhtPayload>(&packet.encrypted_payload) {
+                                    match dht_msg {
+                                        DhtPayload::Ping => {
+                                            tracing::info!("    [+] PING recibido de {}. Respondiendo PONG.", src);
+                                            let pong_bin = bincode::serialize(&DhtPayload::Pong).unwrap();
+                                            let mut p_packet = Ipv7Packet {
+                                                version:7, source_id: *my_node.address.as_bytes(), destination_id: packet.source_id,
+                                                signature: vec![0u8; 64], ttl: config::master::DEFAULT_MESSAGE_TTL, nonce: vec![0], encrypted_payload: pong_bin,
+                                            };
+                                            let mut sm = Vec::new(); sm.extend_from_slice(&p_packet.source_id); sm.extend_from_slice(&p_packet.destination_id);
+                                            sm.extend_from_slice(&p_packet.ttl.to_le_bytes()); sm.extend_from_slice(&p_packet.encrypted_payload);
+                                            p_packet.signature = my_node.sign(&sm).to_bytes().to_vec();
+                                            let _ = relay.send_raw_packet(&p_packet.to_bytes().unwrap(), &src.to_string()).await;
+                                        },
+                                        DhtPayload::Pong => {
+                                            tracing::info!("    [+] PONG recibido. ¡Mapeo completado exitosamente!");
+                                        },
+                                        _ => {}
+                                    }
+                                } else if let Ok(hs_payload) = bincode::deserialize::<transport::handshake::HandshakePayload>(&packet.encrypted_payload) {
                                     let _ = tx_clone.send(TuiEvent::LogMsg(format!("    [✓] Handshake X25519 Request extraído. Efímera: {:?}", &hs_payload.ephemeral_public_key[0..4]))).await;
                                     
                                     // Responder Handshake Orgánico
@@ -153,11 +167,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let state = DashboardState::new(my_address_str, dht.snapshot_peers().await);
         run_dashboard(rx, state).await?;
         
-    } else if args[1] == "--connect" {
-        // MODO NODO ACTIVO (Enviando un Handshake Inicial)
-        let target_pubkey = sim_dest_pubkey;
+    } else if args[1] == "--ping" {
+        // MODO DESCUBRIMIENTO (Enviando PING para popular topología)
+        if args.len() < 4 {
+            tracing::error!("USO: ipv7-core --ping <IP:Puerto> <Base58_Target_ID>");
+            return Ok(());
+        }
+        let target_address = &args[2];
+        let decoded = bs58::decode(args[3].replace("id://", "")).into_vec().unwrap();
+        let mut target_pubkey = [0u8; 32];
+        target_pubkey.copy_from_slice(&decoded[0..32]);
         
-        tracing::info!("[*] Consultando DHT local para localizar nodo id://[DESTINO_SIMULADO]...");
+        tracing::info!("[*] Ejecutando UDP NAT Punching hacia -> {}", target_address);
+        let relay = OverlayRelay::start_listener("0.0.0.0").await?;
+        
+        let ping_bin = bincode::serialize(&DhtPayload::Ping).unwrap();
+        let mut p_packet = Ipv7Packet {
+            version: 7, source_id: *my_node.address.as_bytes(), destination_id: target_pubkey,
+            signature: vec![0u8; 64], ttl: config::master::DEFAULT_MESSAGE_TTL, nonce: vec![0], encrypted_payload: ping_bin,
+        };
+        let mut sm = Vec::new(); sm.extend_from_slice(&p_packet.source_id); sm.extend_from_slice(&p_packet.destination_id);
+        sm.extend_from_slice(&p_packet.ttl.to_le_bytes()); sm.extend_from_slice(&p_packet.encrypted_payload);
+        p_packet.signature = my_node.sign(&sm).to_bytes().to_vec();
+        
+        relay.send_raw_packet(&p_packet.to_bytes().unwrap(), target_address).await?;
+        tracing::info!("[✓] PING enviado. Tu nodo ahora está registrado en la tabla del oponente.");
+        
+        // Esperando PONG
+        let mut buf = [0u8; config::master::DEFAULT_PACKET_SIZE];
+        if let Ok(Ok((_amt, _))) = tokio::time::timeout(std::time::Duration::from_secs(3), relay.socket.recv_from(&mut buf)).await {
+            tracing::info!("[✓] PONG recibido. Kademlia Orgánico Sincronizado recíprocamente.");
+        } else {
+            tracing::error!("[X] Timeout extenuado. El nodo está apagado o inalcanzable.");
+        }
+        
+    } else if args[1] == "--connect" {
+        if args.len() < 3 {
+             tracing::error!("USO: ipv7-core --connect <Base58_Target_ID>"); return Ok(());
+        }
+        let decoded = bs58::decode(args[2].replace("id://", "")).into_vec().unwrap();
+        let mut target_pubkey = [0u8; 32];
+        target_pubkey.copy_from_slice(&decoded[0..32]);
+        
+        tracing::info!("[*] Consultando DHT local para localizar nodo id://{}...", args[2]);
         let target_address = match dht.lookup(&target_pubkey).await {
             Some(addr) => addr,
             None => {
@@ -219,11 +271,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         
     } else if args[1] == "--cascade" {
-        // MODO NODO ACTIVO ENRUTADO (Onion proxy vía Nodo 2)
+        if args.len() < 4 {
+             tracing::error!("USO: ipv7-core --cascade <Base58_Target_ID> <Base58_Relay_ID>"); return Ok(());
+        }
+        // MODO NODO ACTIVO ENRUTADO (Onion proxy vía Nodo Relé)
         tracing::info!("\n[*] INICIANDO TRANSMISIÓN DE CASCADA (ONION ROUTING)");
         
-        let target_pubkey = sim_dest_pubkey;
-        let relay_pubkey = sim_relay_pubkey;
+        let mut target_pubkey = [0u8; 32];
+        let mut relay_pubkey = [0u8; 32];
+        target_pubkey.copy_from_slice(&bs58::decode(args[2].replace("id://", "")).into_vec().unwrap()[0..32]);
+        relay_pubkey.copy_from_slice(&bs58::decode(args[3].replace("id://", "")).into_vec().unwrap()[0..32]);
         
         // El relé es el único que necesitamos contactar físicamente ahora
         let relay_address = match dht.lookup(&relay_pubkey).await {
