@@ -18,6 +18,7 @@ use transport::crypto::SymmetricTunnel;
 use transport::session::SessionManager;
 use transport::virtual_adapter::start_virtual_adapter;
 use transport::discovery::run_bootstrap;
+use transport::community::{fetch_announcements, send_community_message};
 use ui::dashboard::{run_dashboard, DashboardState, TuiEvent};
 use std::env;
 use tokio::sync::mpsc;
@@ -177,7 +178,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
 
         // Hilo principal queda atrapado re-dibujando el TUI
-        let state = DashboardState::new(my_address_str, dht.snapshot_peers().await);
+        // Cargar anuncios del desarrollador desde Firebase
+        let dev_announcements = fetch_announcements().await;
+        let mut state = DashboardState::new(my_address_str, dht.snapshot_peers().await);
+        state.status = format!("ACTIVO | {} par(es) conocidos", dht.peer_count().await);
+        state.announcements = dev_announcements
+            .into_iter()
+            .map(|a| (a.title, a.body))
+            .collect();
         run_dashboard(rx, state).await?;
         
     } else if args[1] == "--ping" {
@@ -404,6 +412,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(e) => {
                  tracing::error!("    [X] Error crítico. Reintente como Administrador o instale tun/tap drivers: {}", e);
             }
+        }
+    } else if args[1] == "--say" {
+        // MODO COMUNIDAD: Enviar mensaje al desarrollador
+        if args.len() < 4 {
+            tracing::error!("USO: ipv7-core --say <categoria> <\"mensaje\">\n  Categorías: bug | feature | hello | contrib");
+            return Ok(());
+        }
+        let category = &args[2];
+        let message = &args[3];
+        let my_id_b58 = my_node.address.to_string();
+        tracing::info!("[Comunidad] Enviando mensaje al desarrollador...");
+        tracing::info!("  Categoría: {}", category);
+        tracing::info!("  Mensaje:   {}", message);
+        
+        let ok = send_community_message(&my_id_b58, category, message).await;
+        if ok {
+            tracing::info!("✓ ¡Mensaje entregado! El desarrollador lo recibirá en Firebase.");
+            tracing::info!("  Gracias por contribuir a la Red IPv7.");
+        } else {
+            tracing::error!("[X] No se pudo entregar el mensaje. ¿Hay conexión a internet?");
         }
     } else {
          tracing::error!("Argumentos inválidos.");

@@ -28,6 +28,7 @@ pub struct DashboardState {
     pub status: String,
     pub dht_peers: Vec<(String, String)>,
     pub current_tab: usize,
+    pub announcements: Vec<(String, String)>,  // (title, body)
 }
 
 impl DashboardState {
@@ -38,6 +39,7 @@ impl DashboardState {
             status: "INICIALIZANDO".to_string(),
             dht_peers,
             current_tab: 0,
+            announcements: Vec::new(),
         }
     }
 }
@@ -76,6 +78,7 @@ pub async fn run_dashboard(mut rx: mpsc::Receiver<TuiEvent>, initial_state: Dash
                     KeyCode::Char('q') => break,
                     KeyCode::Char('1') => state.current_tab = 0,
                     KeyCode::Char('2') => state.current_tab = 1,
+                    KeyCode::Char('3') => state.current_tab = 2,
                     _ => {}
                 }
             }
@@ -105,30 +108,51 @@ fn draw_ui(f: &mut ratatui::Frame, state: &DashboardState) {
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
         .split(chunks[1]);
 
-    // Lado Izquierdo: LOGS o DHT (Basado en Tab)
+    // Lado Izquierdo: LOGS o DHT o COMUNIDAD (Tab actual)
     if state.current_tab == 0 {
         let formatted_logs = state.logs.join("\n");
         let logs_widget = Paragraph::new(formatted_logs).block(
             Block::default()
-                .title(" [ (1) Telemetría & Traza IPv7 | (2) Rutas DHT ] ")
+                .title(" [ (1) Telemetría | (2) Kademlia DHT | (3) Comunidad ] ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan)),
         );
         f.render_widget(logs_widget, chunks[0]);
-    } else {
-        let mut formatted_peers = String::from("ID SOBERANO (Base58)                                => ENDPOINT\n");
-        formatted_peers.push_str("------------------------------------------------------------------\n");
+    } else if state.current_tab == 1 {
+        let mut formatted_peers = String::from("ID SOBERANO (Base58)                      => ENDPOINT\n");
+        formatted_peers.push_str("----------------------------------------------------------------------\n");
         for (id, addr) in &state.dht_peers {
-            formatted_peers.push_str(&format!("{:<50} => {}\n", id, addr));
+            formatted_peers.push_str(&format!("{:<46} => {}\n", id, addr));
         }
-        
         let dht_widget = Paragraph::new(formatted_peers).block(
             Block::default()
-                .title(" [ (1) Telemetría | (2) Explorador Kademlia DHT ] ")
+                .title(" [ (1) Telemetría | (2) Explorador Kademlia DHT | (3) Comunidad ] ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Magenta)),
         );
         f.render_widget(dht_widget, chunks[0]);
+    } else {
+        let mut text = String::from("ANUNCIOS DEL DESARROLLADOR\n");
+        text.push_str("══════════════════════════════════════════════════════\n\n");
+        if state.announcements.is_empty() {
+            text.push_str("Bienvenido a la red IPv7.\n\n");
+            text.push_str("No hay anuncios del desarrollador por ahora.\n\n");
+            text.push_str("Para enviar feedback:\n");
+            text.push_str("  ipv7-core --say feature \'Quiero X funcionalidad\'\n");
+            text.push_str("  ipv7-core --say bug \'El nodo no inicia en Linux\'\n");
+            text.push_str("  ipv7-core --say hello \'Hola desde Argentina!\'\n");
+        } else {
+            for (title, body) in &state.announcements {
+                text.push_str(&format!("[ {} ]\n{}\n\n", title, body));
+            }
+        }
+        let comm_widget = Paragraph::new(text).block(
+            Block::default()
+                .title(" [ (1) Telemetría | (2) Kademlia | (★ 3) Comunidad & Anuncios ] ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::LightBlue)),
+        );
+        f.render_widget(comm_widget, chunks[0]);
     }
 
     // Superior Derecho: ESTADO DEL NODO
