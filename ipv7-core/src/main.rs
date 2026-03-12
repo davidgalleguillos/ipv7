@@ -13,8 +13,9 @@ use identity::dht::DhtRegistry;
 use transport::overlay::OverlayRelay;
 use transport::packet::Ipv7Packet;
 use transport::relay::RelayInstruction;
-use transport::handshake::HandshakeSession;
+use transport::handshake::{HandshakeSession, HandshakeResponse};
 use transport::crypto::SymmetricTunnel;
+use transport::session::SessionManager;
 use transport::virtual_adapter::start_virtual_adapter;
 use ui::dashboard::{run_dashboard, DashboardState, TuiEvent};
 use std::env;
@@ -41,9 +42,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Configurar canal para enviar logs desde la asincronía al TUI
     let (tx, rx) = mpsc::channel::<TuiEvent>(100);
 
-    // SIMULACIÓN DHT (Phase 3 & 6)
+    // SIMULACIÓN DHT (Phase 3 & 8)
     // En el futuro, resolver "id://" a IP real usará Kademlia DHT.
-    let mut dht = DhtRegistry::new(*my_node.address.as_bytes());
+    let dht = DhtRegistry::new(*my_node.address.as_bytes());
+    let sessions = SessionManager::new();
     let sim_dest_pubkey = [0x99; 32];
     let sim_relay_pubkey = [0x88; 32]; // Nodo Intermedio
 
@@ -60,6 +62,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         let tx_clone = tx.clone();
         let dht_clone = dht.clone();
+        let sessions_clone = sessions.clone();
+        let my_address_str = my_node.address.to_string();
         
         // Desplazar el bucle de red UDP a una tarea asíncrona de fondo
         tokio::spawn(async move {
@@ -79,7 +83,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 
                                 // Evaluar qué tipo de Payload es
                                 if let Ok(hs_payload) = bincode::deserialize::<transport::handshake::HandshakePayload>(&packet.encrypted_payload) {
-                                    let _ = tx_clone.send(TuiEvent::LogMsg(format!("    [✓] Handshake X25519 extraído. Efímera: {:?}", &hs_payload.ephemeral_public_key[0..4]))).await;
+                                    let _ = tx_clone.send(TuiEvent::LogMsg(format!("    [✓] Handshake X25519 Request extraído. Efímera: {:?}", &hs_payload.ephemeral_public_key[0..4]))).await;
+                                    
+                                    // Responder Handshake Orgánico
+                                    let local_session = HandshakeSession::new();
+                                    let local_pubkey = *local_session.public_key.as_bytes();
+                                    let shared_secret = local_session.derive_shared_secret(hs_payload.ephemeral_public_key);
+                                    
+                                    sessions_clone.add_secret(packet.source_id, shared_secret).await;
+                                    let _ = tx_clone.send(TuiEvent::LogMsg("    [+] Sesión Asegurada. Secreto Orgánico ChaCha20 Almacenado.".to_string())).await;
+                                    
+                                    let resp_payload = HandshakeResponse { ephemeral_public_key: local_pubkey };
+                                    let resp_bin = bincode::serialize(&resp_payload).unwrap();
+                                    let mut resp_packet = Ipv7Packet {
+                                        version: 7, source_id: *my_node.address.as_bytes(), destination_id: packet.source_id,
+                                        signature: vec![0u8; 64], ttl: config::master::DEFAULT_MESSAGE_TTL, nonce: vec![0], encrypted_payload: resp_bin,
+                                    };
+                                    let mut sig_msg = Vec::new();
+                                    sig_msg.extend_from_slice(&resp_packet.source_id); sig_msg.extend_from_slice(&resp_packet.destination_id);
+                                    sig_msg.extend_from_slice(&resp_packet.ttl.to_le_bytes()); sig_msg.extend_from_slice(&resp_packet.encrypted_payload);
+                                    resp_packet.signature = my_node.sign(&sig_msg).to_bytes().to_vec();
+                                    
+                                    if let Some(target_addr) = dht_clone.lookup(&packet.source_id).await {
+                                        let _ = relay.send_raw_packet(&resp_packet.to_bytes().unwrap(), &target_addr).await;
+                                    }
+                                } else if let Ok(_hs_resp) = bincode::deserialize::<HandshakeResponse>(&packet.encrypted_payload) {
+                                    let _ = tx_clone.send(TuiEvent::LogMsg("    [✓] Handshake RESPONSE Recibido. Túnel listo.".to_string())).await;
                                 } else if let Ok(relay_payload) = bincode::deserialize::<RelayInstruction>(&packet.encrypted_payload) {
                                     let _ = tx_clone.send(TuiEvent::LogMsg("    [🛡️] Instrucción de RELÉ (Cebolla) detectada.".to_string())).await;
                                     let _ = tx_clone.send(TuiEvent::LogMsg(format!("    [*] Desenvolviendo y reinyectando a DHT Target ID..."))).await;
@@ -93,16 +122,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let _ = relay.send_raw_packet(&relay_payload.nested_packet, &target_addr).await;
                                 } else {
                                     tracing::warn!("Payload no es Handshake ni RelayInstruction. Asumiendo Datos Cifrados Finales.");
-                                    let shared_secret = [0x55; 32]; // Secreto pre-acordado simulado (Post-Handshake)
-                                    let tunnel = SymmetricTunnel::new(shared_secret);
-                                    match tunnel.decrypt_payload(&packet.nonce, &packet.encrypted_payload) {
-                                        Ok(plaintext) => {
-                                            let msg = String::from_utf8_lossy(&plaintext);
-                                            let _ = tx_clone.send(TuiEvent::LogMsg(format!("    [📥] MENSAJE SEGURO DESCIFRADO: {}", msg))).await;
-                                        },
-                                        Err(e) => {
-                                            let _ = tx_clone.send(TuiEvent::LogMsg(format!("    [X] ALERTA CRÍTICA: Error ChaCha20-Poly1305. {}", e))).await;
+                                    if let Some(shared_secret) = sessions_clone.get_secret(&packet.source_id).await {
+                                        let tunnel = SymmetricTunnel::new(shared_secret);
+                                        match tunnel.decrypt_payload(&packet.nonce, &packet.encrypted_payload) {
+                                            Ok(plaintext) => {
+                                                let msg = String::from_utf8_lossy(&plaintext);
+                                                let _ = tx_clone.send(TuiEvent::LogMsg(format!("    [📥] MENSAJE SEGURO DESCIFRADO: {}", msg))).await;
+                                            },
+                                            Err(e) => {
+                                                let _ = tx_clone.send(TuiEvent::LogMsg(format!("    [X] ALERTA CRÍTICA: Error ChaCha20-Poly1305. {}", e))).await;
+                                            }
                                         }
+                                    } else {
+                                        let _ = tx_clone.send(TuiEvent::LogMsg("    [X] ALERTA: Mensaje rechazado (No hay sesión Handshake guardada).".to_string())).await;
                                     }
                                 }
                             } else {
@@ -118,7 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
 
         // Hilo principal queda atrapado re-dibujando el TUI
-        let state = DashboardState::new(my_node.address.to_string(), dht.snapshot_peers().await);
+        let state = DashboardState::new(my_address_str, dht.snapshot_peers().await);
         run_dashboard(rx, state).await?;
         
     } else if args[1] == "--connect" {
@@ -174,7 +206,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!("[🚀] Disparando Handshake Request TCP-like sobre UDP hacia -> {}", target_address);
         
         relay.send_raw_packet(&raw_bytes, &target_address).await?;
-        tracing::info!("[✓] Handshake proyectado al túnel.");
+        tracing::info!("[✓] Handshake proyectado al túnel. Esperando respuesta orgánica...");
+        
+        let mut buf = [0u8; config::master::DEFAULT_PACKET_SIZE];
+        if let Ok(Ok((amt, _))) = tokio::time::timeout(std::time::Duration::from_secs(3), relay.socket.recv_from(&mut buf)).await {
+            let pkt = Ipv7Packet::from_bytes(&buf[..amt]).unwrap();
+            let hs_resp = bincode::deserialize::<HandshakeResponse>(&pkt.encrypted_payload).unwrap();
+            let _shared_secret = handshake_session.derive_shared_secret(hs_resp.ephemeral_public_key);
+            tracing::info!("[✓] Magia Diffie-Hellman completada. Secreto Orgánico ChaCha20 obtenido de la red exitosamente.");
+        } else {
+            tracing::error!("[X] Timeout. El nodo remoto no respondió el Handshake IPv7.");
+        }
         
     } else if args[1] == "--cascade" {
         // MODO NODO ACTIVO ENRUTADO (Onion proxy vía Nodo 2)
@@ -189,11 +231,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             None => return Ok(()),
         };
         tracing::info!("    -> ¡Endpoint físico del Relé localizado! {}", relay_address);
+        let target_address = dht.lookup(&target_pubkey).await.unwrap_or_else(|| "127.0.0.1:60553".to_string());
         
-        // Cifrado Simétrico del payload interior (Fase 7)
-        let shared_secret = [0x55; 32];
-        let tunnel = SymmetricTunnel::new(shared_secret);
-        let secret_msg = b"ALERTA: Este mensaje viaja blindado con ChaCha20-Poly1305 a traves de la cebolla IPv7.";
+        // --- Handshake Preliminar Directo (Para derivar orgánicamente el secreto sin Mocks) ---
+        let net_relay = OverlayRelay::start_listener("0.0.0.0").await?;
+        let handshake_session = HandshakeSession::new();
+        let payload_bin = bincode::serialize(&handshake_session.create_payload()).unwrap();
+        let mut hs_packet = Ipv7Packet {
+            version: 7, source_id: *my_node.address.as_bytes(), destination_id: target_pubkey, signature: vec![0u8; 64],
+            ttl: config::master::DEFAULT_MESSAGE_TTL, nonce: vec![0], encrypted_payload: payload_bin,
+        };
+        let mut sig_msg = Vec::new();
+        sig_msg.extend_from_slice(&hs_packet.source_id); sig_msg.extend_from_slice(&hs_packet.destination_id);
+        sig_msg.extend_from_slice(&hs_packet.ttl.to_le_bytes()); sig_msg.extend_from_slice(&hs_packet.encrypted_payload);
+        hs_packet.signature = my_node.sign(&sig_msg).to_bytes().to_vec();
+        
+        net_relay.send_raw_packet(&hs_packet.to_bytes().unwrap(), &target_address).await?;
+        
+        let mut buf = [0u8; config::master::DEFAULT_PACKET_SIZE];
+        let auth_secret = if let Ok(Ok((amt, _))) = tokio::time::timeout(std::time::Duration::from_secs(3), net_relay.socket.recv_from(&mut buf)).await {
+            let pkt = Ipv7Packet::from_bytes(&buf[..amt]).unwrap();
+            let hs_resp = bincode::deserialize::<HandshakeResponse>(&pkt.encrypted_payload).unwrap();
+            let s = handshake_session.derive_shared_secret(hs_resp.ephemeral_public_key);
+            tracing::info!("[✓] Pre-Acuerdo Orgánico exitoso (Target Derivó Mismo Secreto).");
+            s
+        } else {
+            tracing::error!("    [X] Falló preparación orgánica prioritaria. Se suspende Cascada.");
+            return Ok(());
+        };
+
+        // Cifrado Simétrico INEXPUGNABLE del payload interior (Fase 12)
+        let tunnel = SymmetricTunnel::new(auth_secret);
+        let secret_msg = b"ALERTA: Este mensaje viaja blindado con ChaCha20-Poly1305 real y asincrono a traves de la cebolla IPv7 sin Mocks.";
         let (nonce, encrypted_body) = tunnel.encrypt_payload(secret_msg).unwrap();
 
         // Paquete Cebolla INTERNO (El que verá el destino final)

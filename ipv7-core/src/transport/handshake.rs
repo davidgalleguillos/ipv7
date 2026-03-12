@@ -13,6 +13,13 @@ pub struct HandshakePayload {
     pub ephemeral_public_key: [u8; 32],
 }
 
+/// La respuesta afirmativa enviada desde el Listener hacia el Sender 
+/// completando orgánicamente la derivación del secreto X25519.
+#[derive(Serialize, Deserialize, Debug)]
+pub struct HandshakeResponse {
+    pub ephemeral_public_key: [u8; 32],
+}
+
 /// Manejador de la sesión de handshake activo.
 /// Guarda el secreto efímero hasta que se completa el handshake Diffie-Hellman.
 pub struct HandshakeSession {
