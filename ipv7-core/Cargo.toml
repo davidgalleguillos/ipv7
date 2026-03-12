@@ -33,6 +33,10 @@ ratatui = "0.28"
 crossterm = "0.28"
 tun = { version = "0.8.6", features = ["async"] }
 
+# Bootstrap Global (Fase 14: Descubrimiento Multicapa)
+reqwest = { version = "0.12", features = ["json"] }
+serde_json = "1.0"
+
 # Perfiles de Optimización (Fase 11: Despliegue Masivo)
 [profile.release]
 opt-level = 3       # Máxima optimización de velocidad

@@ -5,3 +5,4 @@ pub mod handshake;
 pub mod relay;
 pub mod virtual_adapter;
 pub mod session;
+pub mod discovery;

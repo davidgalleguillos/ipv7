@@ -17,6 +17,7 @@ use transport::handshake::{HandshakeSession, HandshakeResponse};
 use transport::crypto::SymmetricTunnel;
 use transport::session::SessionManager;
 use transport::virtual_adapter::start_virtual_adapter;
+use transport::discovery::run_bootstrap;
 use ui::dashboard::{run_dashboard, DashboardState, TuiEvent};
 use std::env;
 use tokio::sync::mpsc;
@@ -48,9 +49,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if args[1] == "--listen" {
         // MODO NODO PASIVO (Esperando conexión)
-        let relay = OverlayRelay::start_listener("127.0.0.1").await?;
+        // Escuchar en TODAS las interfaces para recibir tanto LAN como WAN
+        let relay = OverlayRelay::start_listener("0.0.0.0").await?;
+        let local_addr = format!("0.0.0.0:{}", relay.bound_port);
+        let my_id_b58 = my_node.address.to_string();
         tracing::info!("[📡] Escuchando activamente en el Subpuerto IPv7: {}", relay.bound_port);
-        tracing::debug!("[📡] Dile a otro nodo que se conecte a ti usando tu IP de red de área local y puerto.");
+        
+        // ═══════════════════════════════════════════
+        // FASE 14: Bootstrap Multicapa Automático
+        // ═══════════════════════════════════════════
+        run_bootstrap(
+            my_node.address.as_bytes(),
+            &my_id_b58,
+            &local_addr,
+            &dht,
+        ).await;
         
         let tx_clone = tx.clone();
         let dht_clone = dht.clone();
