@@ -35,17 +35,41 @@ Si deseas compilar con tu propio compilador e inspeccionar la arquitectura en an
 
 ---
 
-## 🛠️ Cómo Utilizar el Motor IPv7
+## 🛠️ Cómo Utilizar el Motor IPv7 (Real, sin Mocks)
 
-El motor se opera 100% mediante Terminal con la Consola TUI Interactiva activada:
+El motor se opera 100% mediante Terminal. Cada nodo tiene una **Identidad Soberana** generada automáticamente al iniciarse (ED25519 + Base58), visible en la consola del TUI.
 
-- **Modo Servidor / Escucha Pasiva:** `ipv7-core --listen`
-  (Espera a conectarse a tu propia subred).
-  
-- **Modo Cliente VPN (Red Falsa Local):** `ipv7-core --vpn`
-  (Instancia una interfaz en la IP Mágica `10.7.7.7` capturando tráfico físico).
-  
-- **Modo Inyector Proxy (Escudo de Cascada):** `ipv7-core --cascade`
-  (Envuelve paquetes usando Onion-Routing para disfrazar tu identidad cruzando reles).
+### Flujo Completo de Conexión Orgánica (3 Terminales)
 
-*Al estar dentro de la Consola TUI, presiona **`1`** para ver el estado del Enrutamiento o **`2`** para explorar a tus Vecinos P2P en el DHT.*
+**Paso 1 — Levantar el Nodo Destino (Terminal 1):**
+```bash
+ipv7-core --listen
+```
+Guarda la dirección `id://Abc123...` que aparece. Es tu Identidad Soberana.
+
+**Paso 2 — Inyectar tu IP en el DHT del otro nodo (UDP NAT Punching):**
+```bash
+ipv7-core --ping <IP:Puerto> id://Abc123...
+```
+Esto envía un `PING` autenticado hacia el IP real del nodo destino, que responde un `PONG` y ambos nodos quedan mutuamente registrados en sus Tablas Kademlia. No se necesita pre-configuración ni servidores centrales.
+
+**Paso 3 — Conectar y hacer Handshake X25519:**
+```bash
+ipv7-core --connect id://Abc123...
+```
+Deriva orgánicamente un secreto compartido ChaCha20 via Diffie-Hellman. Ahora el canal está cifrado de extremo a extremo.
+
+**Paso 4 (Opcional) — Enrutamiento Onion de Cascada:**
+```bash
+ipv7-core --cascade id://Destino... id://Relay...
+```
+Envuelve el mensaje en capas de cebolla y lo lanza via un nodo intermediario, disimulando el origen.
+
+**Modo VPN — Interceptar tráfico IPv4 del OS:**
+```bash
+# Como Administrador:
+ipv7-core --vpn
+```
+Instancia una interfaz virtual TUN/TAP en `10.7.7.7` para enrutar tráfico del sistema operativo.
+
+*Al estar dentro de la Consola TUI: **`1`** = Telemetría | **`2`** = Explorador Kademlia DHT | **`q`** = Salir.*
