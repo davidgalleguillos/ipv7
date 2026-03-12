@@ -31,7 +31,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Gobernanza e Interfaz (Fase 5)
 ratatui = "0.28"
 crossterm = "0.28"
-tun = { version = "0.8.6", features = ["async"] }
+# tun = { version = "0.8.6", features = ["async"] }  ← Requiere driver kernel (WinTun/TUN/TAP)
+# Para activar VPN real: instalar wintun (Windows) o correr como root (Linux/macOS)
 
 # Bootstrap Global (Fase 14: Descubrimiento Multicapa)
 reqwest = { version = "0.12", features = ["json"] }
