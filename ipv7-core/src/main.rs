@@ -62,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // ═══════════════════════════════════════════
         // FASE 14: Bootstrap Multicapa Automático
         // ═══════════════════════════════════════════
-        run_bootstrap(my_node.address.as_bytes(), &my_id_b58, &local_addr, &dht).await;
+        run_bootstrap(&my_node, &my_id_b58, &local_addr, &dht).await;
 
         let tx_clone = tx.clone();
         let dht_clone = dht.clone();

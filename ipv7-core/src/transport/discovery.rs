@@ -10,6 +10,7 @@ use crate::config::bootstrap::{
 };
 use crate::config::master::DEFAULT_MESSAGE_TTL;
 use crate::identity::dht::{DhtPayload, DhtRegistry};
+use crate::identity::keys::NodeIdentity;
 use crate::transport::packet::Ipv7Packet;
 
 use serde::{Deserialize, Serialize};
@@ -35,7 +36,7 @@ pub struct BootstrapResult {
 /// ============================================================
 /// CAPA 1: Broadcast UDP en la LAN local
 /// ============================================================
-pub async fn discover_lan_peers(my_id_bytes: &[u8; 32], dht: &DhtRegistry) -> usize {
+pub async fn discover_lan_peers(my_node: &NodeIdentity, dht: &DhtRegistry) -> usize {
     tracing::info!("[Descubrimiento] Capa 1: Escaneando red doméstica (LAN Broadcast)...");
 
     // Abrir socket en modo broadcast
@@ -56,15 +57,23 @@ pub async fn discover_lan_peers(my_id_bytes: &[u8; 32], dht: &DhtRegistry) -> us
     };
 
     // Construir paquete IPv7 mínimo para el broadcast
-    let broadcast_packet = Ipv7Packet {
+    let mut broadcast_packet = Ipv7Packet {
         version: 7,
-        source_id: *my_id_bytes,
+        source_id: *my_node.address.as_bytes(),
         destination_id: [0xFFu8; 32], // Broadcast ID
         signature: vec![0u8; 64],
         ttl: DEFAULT_MESSAGE_TTL,
         nonce: vec![0],
         encrypted_payload: ping_bytes,
     };
+
+    // Firma Real Crítica (Resuelve alerta de Firma Inválida)
+    let mut sm = Vec::new();
+    sm.extend_from_slice(&broadcast_packet.source_id);
+    sm.extend_from_slice(&broadcast_packet.destination_id);
+    sm.extend_from_slice(&broadcast_packet.ttl.to_le_bytes());
+    sm.extend_from_slice(&broadcast_packet.encrypted_payload);
+    broadcast_packet.signature = my_node.sign(&sm).to_bytes().to_vec();
 
     let broadcast_addr = format!("255.255.255.255:{}", IPV7_DEFAULT_PORT);
     if let Ok(raw) = broadcast_packet.to_bytes() {
@@ -188,8 +197,10 @@ pub async fn contact_guardian_nodes(dht: &DhtRegistry) -> usize {
 /// ============================================================
 /// ORQUESTADOR PRINCIPAL: Ejecuta las 3 capas en secuencia
 /// ============================================================
+/// ORQUESTADOR PRINCIPAL: Ejecuta las 3 capas en secuencia
+/// ============================================================
 pub async fn run_bootstrap(
-    my_id_bytes: &[u8; 32],
+    my_node: &NodeIdentity,
     my_id_b58: &str,
     my_addr: &str,
     dht: &DhtRegistry,
@@ -199,7 +210,7 @@ pub async fn run_bootstrap(
     tracing::info!("╚════════════════════════════════════════╝");
 
     // Capa 1: LAN
-    let lan_peers = discover_lan_peers(my_id_bytes, dht).await;
+    let lan_peers = discover_lan_peers(my_node, dht).await;
     let is_first = lan_peers == 0;
 
     if is_first {
