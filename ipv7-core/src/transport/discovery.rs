@@ -77,7 +77,8 @@ pub async fn discover_lan_peers(my_id_bytes: &[u8; 32], dht: &DhtRegistry) -> us
     let mut buf = vec![0u8; 65536];
     let deadline = tokio::time::Duration::from_millis(DISCOVERY_TIMEOUT_MS);
 
-    while let Ok(Ok((amt, src))) = tokio::time::timeout(deadline, socket.recv_from(&mut buf)).await {
+    while let Ok(Ok((amt, src))) = tokio::time::timeout(deadline, socket.recv_from(&mut buf)).await
+    {
         if let Ok(pkt) = Ipv7Packet::from_bytes(&buf[..amt]) {
             dht.register_node(pkt.source_id, src.to_string()).await;
             peers_found += 1;
