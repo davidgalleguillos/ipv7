@@ -59,17 +59,24 @@ impl DhtRegistry {
     /// Obtiene los nodos más cercanos conocidos
     pub async fn get_closest_peers(&self, _target: &[u8; 32]) -> Vec<([u8; 32], String)> {
         let table = self.nodes.read().await;
-        table.iter().map(|(id, addr)| (*id, addr.clone())).take(10).collect()
+        table
+            .iter()
+            .map(|(id, addr)| (*id, addr.clone()))
+            .take(10)
+            .collect()
     }
 
     /// Cuántos pares conoce este nodo
     pub async fn peer_count(&self) -> usize {
         self.nodes.read().await.len()
     }
-    
+
     /// Devuelve un volcado de la tabla para visualización administrativa en el TUI.
     pub async fn snapshot_peers(&self) -> Vec<(String, String)> {
         let table = self.nodes.read().await;
-        table.iter().map(|(k, v)| (bs58::encode(k).into_string(), v.clone())).collect()
+        table
+            .iter()
+            .map(|(k, v)| (bs58::encode(k).into_string(), v.clone()))
+            .collect()
     }
 }

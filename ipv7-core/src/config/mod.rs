@@ -1,2 +1,2 @@
-pub mod master;
 pub mod bootstrap;
+pub mod master;

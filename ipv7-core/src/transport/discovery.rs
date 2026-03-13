@@ -6,11 +6,11 @@
 //! CAPA 3: 7 Guardian Nodes hardcodeados → fallback de última instancia
 
 use crate::config::bootstrap::{
-    FIREBASE_URL, FIREBASE_NODE_TTL_SECS, IPV7_DEFAULT_PORT, DISCOVERY_TIMEOUT_MS, GUARDIAN_NODES,
+    DISCOVERY_TIMEOUT_MS, FIREBASE_NODE_TTL_SECS, FIREBASE_URL, GUARDIAN_NODES, IPV7_DEFAULT_PORT,
 };
-use crate::identity::dht::{DhtRegistry, DhtPayload};
-use crate::transport::packet::Ipv7Packet;
 use crate::config::master::DEFAULT_MESSAGE_TTL;
+use crate::identity::dht::{DhtPayload, DhtRegistry};
+use crate::transport::packet::Ipv7Packet;
 
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -35,10 +35,7 @@ pub struct BootstrapResult {
 /// ============================================================
 /// CAPA 1: Broadcast UDP en la LAN local
 /// ============================================================
-pub async fn discover_lan_peers(
-    my_id_bytes: &[u8; 32],
-    dht: &DhtRegistry,
-) -> usize {
+pub async fn discover_lan_peers(my_id_bytes: &[u8; 32], dht: &DhtRegistry) -> usize {
     tracing::info!("[Descubrimiento] Capa 1: Escaneando red doméstica (LAN Broadcast)...");
 
     // Abrir socket en modo broadcast
@@ -99,11 +96,7 @@ pub async fn discover_lan_peers(
 /// ============================================================
 /// CAPA 2: Firebase Realtime Database (Tablón Global P2P)
 /// ============================================================
-pub async fn firebase_bootstrap(
-    my_id_b58: &str,
-    my_addr: &str,
-    dht: &DhtRegistry,
-) -> usize {
+pub async fn firebase_bootstrap(my_id_b58: &str, my_addr: &str, dht: &DhtRegistry) -> usize {
     tracing::info!("[Descubrimiento] Capa 2: Anunciándose en Firebase Rendezvous global...");
 
     let client = reqwest::Client::builder()
@@ -135,7 +128,10 @@ pub async fn firebase_bootstrap(
 
     match client.get(&get_url).send().await {
         Ok(resp) => {
-            if let Ok(nodes) = resp.json::<std::collections::HashMap<String, FirebaseNode>>().await {
+            if let Ok(nodes) = resp
+                .json::<std::collections::HashMap<String, FirebaseNode>>()
+                .await
+            {
                 for (_, node) in nodes.iter() {
                     // Ignorar nodos viejos
                     if now_ts.saturating_sub(node.ts) > FIREBASE_NODE_TTL_SECS {
@@ -173,7 +169,10 @@ pub async fn contact_guardian_nodes(dht: &DhtRegistry) -> usize {
         return 0;
     }
 
-    tracing::info!("[Descubrimiento] Capa 3: Contactando {} Nodos Guardianes...", GUARDIAN_NODES.len());
+    tracing::info!(
+        "[Descubrimiento] Capa 3: Contactando {} Nodos Guardianes...",
+        GUARDIAN_NODES.len()
+    );
     let mut contacted = 0;
 
     for (addr, id_b58) in GUARDIAN_NODES {
@@ -235,8 +234,14 @@ pub async fn run_bootstrap(
 
     tracing::info!("─────────────────────────────────────────");
     tracing::info!("  Red Local:   {} nodo(s)", result.lan_peers_found);
-    tracing::info!("  Global:      {} nodo(s) vía Firebase", result.firebase_peers_found);
-    tracing::info!("  Guardianes:  {} nodo(s) de respaldo", result.guardian_peers_contacted);
+    tracing::info!(
+        "  Global:      {} nodo(s) vía Firebase",
+        result.firebase_peers_found
+    );
+    tracing::info!(
+        "  Guardianes:  {} nodo(s) de respaldo",
+        result.guardian_peers_contacted
+    );
     tracing::info!("─────────────────────────────────────────");
 
     result

@@ -4,7 +4,7 @@
 
 use chacha20poly1305::{
     aead::{Aead, KeyInit, OsRng},
-    XChaCha20Poly1305, XNonce, Key
+    Key, XChaCha20Poly1305, XNonce,
 };
 use rand_core::RngCore;
 
@@ -24,7 +24,10 @@ impl SymmetricTunnel {
 
     /// Cifra implacablemente los datos hacia la infraestructura superpuesta.
     /// Devuelve un Nonce aleatorio y el texto cifrado, o Error.
-    pub fn encrypt_payload(&self, plain_payload: &[u8]) -> Result<(Vec<u8>, Vec<u8>), &'static str> {
+    pub fn encrypt_payload(
+        &self,
+        plain_payload: &[u8],
+    ) -> Result<(Vec<u8>, Vec<u8>), &'static str> {
         let mut nonce_bytes = [0u8; 24];
         OsRng.fill_bytes(&mut nonce_bytes);
         let nonce = XNonce::from(nonce_bytes);
@@ -36,7 +39,11 @@ impl SymmetricTunnel {
     }
 
     /// Desencripta un paquete llegado en bruto desde las profundidades del UDP
-    pub fn decrypt_payload(&self, nonce_bytes: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, &'static str> {
+    pub fn decrypt_payload(
+        &self,
+        nonce_bytes: &[u8],
+        ciphertext: &[u8],
+    ) -> Result<Vec<u8>, &'static str> {
         if nonce_bytes.len() != 24 {
             return Err("Longitud de Nonce Inválida");
         }

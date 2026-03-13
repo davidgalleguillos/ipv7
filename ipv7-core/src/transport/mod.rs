@@ -1,9 +1,9 @@
-pub mod crypto;
-pub mod packet;
-pub mod overlay;
-pub mod handshake;
-pub mod relay;
-pub mod virtual_adapter;
-pub mod session;
-pub mod discovery;
 pub mod community;
+pub mod crypto;
+pub mod discovery;
+pub mod handshake;
+pub mod overlay;
+pub mod packet;
+pub mod relay;
+pub mod session;
+pub mod virtual_adapter;

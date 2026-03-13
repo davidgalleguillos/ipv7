@@ -14,18 +14,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct DevAnnouncement {
     pub title: String,
     pub body: String,
-    pub url: Option<String>,   // Link externo (GitHub release, docs, etc.)
+    pub url: Option<String>, // Link externo (GitHub release, docs, etc.)
     pub ts: u64,
 }
 
 /// Mensaje enviado por un nodo hacia el desarrollador
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CommunityMessage {
-    pub node_id: String,       // Base58 del nodo remitente
-    pub category: String,      // "bug" | "feature" | "hello" | "contrib"
+    pub node_id: String,  // Base58 del nodo remitente
+    pub category: String, // "bug" | "feature" | "hello" | "contrib"
     pub msg: String,
     pub ts: u64,
-    pub version: String,       // Versión del binario
+    pub version: String, // Versión del binario
 }
 
 const BINARY_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -41,7 +41,10 @@ pub async fn fetch_announcements() -> Vec<DevAnnouncement> {
 
     match client.get(&url).send().await {
         Ok(resp) => {
-            match resp.json::<std::collections::HashMap<String, DevAnnouncement>>().await {
+            match resp
+                .json::<std::collections::HashMap<String, DevAnnouncement>>()
+                .await
+            {
                 Ok(map) => {
                     let mut list: Vec<DevAnnouncement> = map.into_values().collect();
                     // Ordenar por timestamp descendente (más recientes primero)
@@ -60,11 +63,7 @@ pub async fn fetch_announcements() -> Vec<DevAnnouncement> {
 }
 
 /// Envía feedback / mensaje al desarrollador desde el nodo
-pub async fn send_community_message(
-    node_id_b58: &str,
-    category: &str,
-    message: &str,
-) -> bool {
+pub async fn send_community_message(node_id_b58: &str, category: &str, message: &str) -> bool {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()

@@ -28,7 +28,7 @@ pub struct DashboardState {
     pub status: String,
     pub dht_peers: Vec<(String, String)>,
     pub current_tab: usize,
-    pub announcements: Vec<(String, String)>,  // (title, body)
+    pub announcements: Vec<(String, String)>, // (title, body)
 }
 
 impl DashboardState {
@@ -44,7 +44,10 @@ impl DashboardState {
     }
 }
 
-pub async fn run_dashboard(mut rx: mpsc::Receiver<TuiEvent>, initial_state: DashboardState) -> io::Result<()> {
+pub async fn run_dashboard(
+    mut rx: mpsc::Receiver<TuiEvent>,
+    initial_state: DashboardState,
+) -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -119,8 +122,10 @@ fn draw_ui(f: &mut ratatui::Frame, state: &DashboardState) {
         );
         f.render_widget(logs_widget, chunks[0]);
     } else if state.current_tab == 1 {
-        let mut formatted_peers = String::from("ID SOBERANO (Base58)                      => ENDPOINT\n");
-        formatted_peers.push_str("----------------------------------------------------------------------\n");
+        let mut formatted_peers =
+            String::from("ID SOBERANO (Base58)                      => ENDPOINT\n");
+        formatted_peers
+            .push_str("----------------------------------------------------------------------\n");
         for (id, addr) in &state.dht_peers {
             formatted_peers.push_str(&format!("{:<46} => {}\n", id, addr));
         }
@@ -156,7 +161,10 @@ fn draw_ui(f: &mut ratatui::Frame, state: &DashboardState) {
     }
 
     // Superior Derecho: ESTADO DEL NODO
-    let info = format!("ID Soberano:\n{}\n\nEstado:\n{}", state.node_id, state.status);
+    let info = format!(
+        "ID Soberano:\n{}\n\nEstado:\n{}",
+        state.node_id, state.status
+    );
     let info_widget = Paragraph::new(info).block(
         Block::default()
             .title(" [ Identidad Local ] ")
@@ -166,7 +174,10 @@ fn draw_ui(f: &mut ratatui::Frame, state: &DashboardState) {
     f.render_widget(info_widget, right_chunks[0]);
 
     // Inferior Derecho: MÉTRICAS
-    let metrics = format!("Conexiones Activas: 1\nAtaques Mitigados: 0\nNodos en Kademlia DHT: {}", state.dht_peers.len());
+    let metrics = format!(
+        "Conexiones Activas: 1\nAtaques Mitigados: 0\nNodos en Kademlia DHT: {}",
+        state.dht_peers.len()
+    );
     let metrics_widget = Paragraph::new(metrics).block(
         Block::default()
             .title(" [ Métricas y DHT ] ")

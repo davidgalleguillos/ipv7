@@ -11,7 +11,7 @@
 /// Elegido para estar en el rango efímero dinámico pero por debajo del límite de OS (65535).
 pub const MIN_PORT_RANGE: u32 = 60553;
 
-/// Máximo número de intentos (saltos) en la cascada de subpuertos antes 
+/// Máximo número de intentos (saltos) en la cascada de subpuertos antes
 /// de declarar un nodo host como inalcanzable.
 pub const MAX_SUBPORT_ATTEMPTS: u8 = 5;
 

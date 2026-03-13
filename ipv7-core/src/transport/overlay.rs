@@ -1,11 +1,11 @@
 //! overlay.rs
-//! Capa de Abstracción UDP 
-//! Aquí se inicializan los Sockets P2P de Tokio permitiendo envíos sin cuellos de botella 
+//! Capa de Abstracción UDP
+//! Aquí se inicializan los Sockets P2P de Tokio permitiendo envíos sin cuellos de botella
 //! mediante cascada pseudoaleatoria y puertos descentralizados.
 
-use tokio::net::UdpSocket;
+use crate::config::master::{MAX_SUBPORT_ATTEMPTS, MIN_PORT_RANGE};
 use std::sync::Arc;
-use crate::config::master::{MIN_PORT_RANGE, MAX_SUBPORT_ATTEMPTS};
+use tokio::net::UdpSocket;
 
 pub struct OverlayRelay {
     /// El canal asíncrono físico local "bindeado" (enganchado).
@@ -24,10 +24,14 @@ impl OverlayRelay {
 
         loop {
             let bind_addr = format!("{}:{}", listen_ip, current_port);
-            
+
             match UdpSocket::bind(&bind_addr).await {
                 Ok(sock) => {
-                    tracing::info!("[+] Overlay UDP Exitoso. Estacionado en Cascada (Nivel {}), Subpuerto: {}", attempt, current_port);
+                    tracing::info!(
+                        "[+] Overlay UDP Exitoso. Estacionado en Cascada (Nivel {}), Subpuerto: {}",
+                        attempt,
+                        current_port
+                    );
                     return Ok(OverlayRelay {
                         socket: Arc::new(sock),
                         bound_port: current_port,
@@ -49,7 +53,11 @@ impl OverlayRelay {
 
     /// Método asíncrono simple que envía un datagrama empacado crudo hacia una ruta IPv4 tradicional
     /// Esto simula a qué nivel opera nuestra encapsulación.
-    pub async fn send_raw_packet(&self, payload: &[u8], target_addr_ipv4: &str) -> std::io::Result<usize> {
+    pub async fn send_raw_packet(
+        &self,
+        payload: &[u8],
+        target_addr_ipv4: &str,
+    ) -> std::io::Result<usize> {
         self.socket.send_to(payload, target_addr_ipv4).await
     }
 }

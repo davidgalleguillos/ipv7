@@ -2,9 +2,9 @@
 //! Protocolo de Enlace (Handshake) IPv7 usando Diffie-Hellman en Curva Elíptica (X25519).
 //! Genera secretos compartidos para el túnel simétrico XChaCha20Poly1305.
 
+use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use x25519_dalek::{EphemeralSecret, PublicKey};
-use rand_core::OsRng;
 
 /// El contenido payload del intento de conexión inicial
 #[derive(Serialize, Deserialize, Debug)]
@@ -13,7 +13,7 @@ pub struct HandshakePayload {
     pub ephemeral_public_key: [u8; 32],
 }
 
-/// La respuesta afirmativa enviada desde el Listener hacia el Sender 
+/// La respuesta afirmativa enviada desde el Listener hacia el Sender
 /// completando orgánicamente la derivación del secreto X25519.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct HandshakeResponse {
@@ -32,7 +32,7 @@ impl HandshakeSession {
     pub fn new() -> Self {
         let secret = EphemeralSecret::random_from_rng(OsRng);
         let public_key = PublicKey::from(&secret);
-        
+
         Self { secret, public_key }
     }
 
@@ -50,7 +50,7 @@ impl HandshakeSession {
     pub fn derive_shared_secret(self, peer_public_bytes: [u8; 32]) -> [u8; 32] {
         let peer_public = PublicKey::from(peer_public_bytes);
         let shared_secret = self.secret.diffie_hellman(&peer_public);
-        
+
         *shared_secret.as_bytes()
     }
 }

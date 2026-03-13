@@ -1,7 +1,7 @@
 //! keys.rs
 //! Identidad Soberana de IPv7
-//! 
-//! Implementa el Principio 2: "Una clave, una identidad". 
+//!
+//! Implementa el Principio 2: "Una clave, una identidad".
 //! La clave privada no sale del dispositivo y se autodestruye de la memoria con Zeroize.
 //! Genera identidades tanto permanentes como efímeras/anónimas.
 
@@ -34,7 +34,7 @@ impl Ipv7Address {
 pub struct NodeIdentity {
     pub address: Ipv7Address,
     /// Clave privada: el nodo debe firmar paquetes con esto
-    secret_key: SigningKey, 
+    secret_key: SigningKey,
 }
 
 impl NodeIdentity {
@@ -44,7 +44,7 @@ impl NodeIdentity {
         let mut csprng = OsRng;
         let secret_key = SigningKey::generate(&mut csprng);
         let public_key = secret_key.verifying_key();
-        
+
         NodeIdentity {
             address: Ipv7Address { public_key },
             secret_key,
