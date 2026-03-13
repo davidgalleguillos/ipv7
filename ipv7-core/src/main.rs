@@ -210,7 +210,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 .to_string(),
                                         ))
                                         .await;
-                                    let _ = tx_clone.send(TuiEvent::LogMsg(format!("    [*] Desenvolviendo y reinyectando a DHT Target ID..."))).await;
+                                    let _ = tx_clone.send(TuiEvent::LogMsg("    [*] Desenvolviendo y reinyectando a DHT Target ID...".to_string())).await;
 
                                     // Búsqueda en el DHT del siguiente salto
                                     let target_addr = dht_clone

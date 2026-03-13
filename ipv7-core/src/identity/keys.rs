@@ -66,7 +66,7 @@ impl Drop for NodeIdentity {
         // Rust's ed25519_dalek SigningKey implements ZeroizeOnDrop by default,
         // pero hacemos explícito el concepto en la capa de la arquitectura para auditoría.
         let secret_bytes = self.secret_key.to_bytes();
-        let mut secret_copy = secret_bytes.clone();
+        let mut secret_copy = secret_bytes;
         secret_copy.zeroize();
     }
 }
