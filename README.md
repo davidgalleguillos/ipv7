@@ -38,7 +38,8 @@ No necesitas saber programar. Descarga y ejecuta:
 |---|---|
 | 🪟 Windows | [`ipv7-core-windows-amd64.exe`](https://github.com/davidgalleguillos/ipv7/releases/latest) |
 | 🐧 Linux | [`ipv7-core-linux-amd64`](https://github.com/davidgalleguillos/ipv7/releases/latest) |
-| 🍎 macOS | [`ipv7-core-macos-amd64`](https://github.com/davidgalleguillos/ipv7/releases/latest) |
+| 🍎 macOS Intel | [`ipv7-core-macos-amd64`](https://github.com/davidgalleguillos/ipv7/releases/latest) |
+| 🍎 macOS Silicon | [`ipv7-core-macos-arm64`](https://github.com/davidgalleguillos/ipv7/releases/latest) |
 
 ```bash
 # Linux / macOS: dar permisos y ejecutar
@@ -58,6 +59,9 @@ cd ipv7/ipv7-core
 cargo build --release
 ./target/release/ipv7-core --listen
 ```
+
+> [!TIP]
+> **Windows Users:** En caso de error, el programa pausará automáticamente la consola para permitirte leer el diagnóstico antes de cerrarse.
 
 ---
 

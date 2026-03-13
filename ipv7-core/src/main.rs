@@ -1,5 +1,5 @@
 //! main.rs
-//! IPv7 Core v1.1.0 — Motor Soberano P2P con Bootstrap Multicapa, Kademlia DHT y Criptografía Real
+//! IPv7 Core v1.1.1 — Motor Soberano P2P con Bootstrap Multicapa, Kademlia DHT y Criptografía Real
 #![allow(dead_code)]
 
 mod config;
@@ -32,10 +32,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("===========================================================");
 
     let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        tracing::error!("USO: ipv7-core [--listen] | [--connect] | [--cascade] | [--vpn]");
-        std::process::exit(1);
-    }
+    
+    // Si no hay argumentos, por defecto iniciamos como nodo pasivo (Dashboard)
+    let mode = if args.len() < 2 {
+        "--listen"
+    } else {
+        &args[1]
+    };
 
     let my_node = NodeIdentity::generate_new();
     tracing::info!("[*] Identidad Local Soberana Generada.");
@@ -48,7 +51,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dht = DhtRegistry::new(*my_node.address.as_bytes());
     let sessions = SessionManager::new();
 
-    if args[1] == "--listen" {
+    if mode == "--listen" {
+        // ... (resto del código del modo listen igual)
         // MODO NODO PASIVO (Esperando conexión)
         // Escuchar en TODAS las interfaces para recibir tanto LAN como WAN
         let relay = OverlayRelay::start_listener("0.0.0.0").await?;
@@ -188,10 +192,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .collect();
         run_dashboard(rx, state).await?;
         
-    } else if args[1] == "--ping" {
+    } else if mode == "--ping" {
         // MODO DESCUBRIMIENTO (Enviando PING para popular topología)
         if args.len() < 4 {
             tracing::error!("USO: ipv7-core --ping <IP:Puerto> <Base58_Target_ID>");
+            wait_for_exit();
             return Ok(());
         }
         let target_address = &args[2];
@@ -222,9 +227,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tracing::error!("[X] Timeout extenuado. El nodo está apagado o inalcanzable.");
         }
         
-    } else if args[1] == "--connect" {
+    } else if mode == "--connect" {
         if args.len() < 3 {
-             tracing::error!("USO: ipv7-core --connect <Base58_Target_ID>"); return Ok(());
+             tracing::error!("USO: ipv7-core --connect <Base58_Target_ID>"); 
+             wait_for_exit();
+             return Ok(());
         }
         let decoded = bs58::decode(args[2].replace("id://", "")).into_vec().unwrap();
         let mut target_pubkey = [0u8; 32];
@@ -235,6 +242,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(addr) => addr,
             None => {
                 tracing::error!("[X] Error DHT: Nodo no registrado.");
+                wait_for_exit();
                 return Ok(());
             }
         };
@@ -291,9 +299,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tracing::error!("[X] Timeout. El nodo remoto no respondió el Handshake IPv7.");
         }
         
-    } else if args[1] == "--cascade" {
+    } else if mode == "--cascade" {
         if args.len() < 4 {
-             tracing::error!("USO: ipv7-core --cascade <Base58_Target_ID> <Base58_Relay_ID>"); return Ok(());
+             tracing::error!("USO: ipv7-core --cascade <Base58_Target_ID> <Base58_Relay_ID>"); 
+             wait_for_exit();
+             return Ok(());
         }
         // MODO NODO ACTIVO ENRUTADO (Onion proxy vía Nodo Relé)
         tracing::info!("\n[*] INICIANDO TRANSMISIÓN DE CASCADA (ONION ROUTING)");
@@ -306,7 +316,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // El relé es el único que necesitamos contactar físicamente ahora
         let relay_address = match dht.lookup(&relay_pubkey).await {
             Some(addr) => addr,
-            None => return Ok(()),
+            None => {
+                wait_for_exit();
+                return Ok(());
+            }
         };
         tracing::info!("    -> ¡Endpoint físico del Relé localizado! {}", relay_address);
         let target_address = dht.lookup(&target_pubkey).await.unwrap_or_else(|| "127.0.0.1:60553".to_string());
@@ -402,7 +415,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         net_relay.send_raw_packet(&final_raw_bytes, &relay_address).await?;
         tracing::info!("[✓] Cascada inicializada ciegamente.");
         
-    } else if args[1] == "--vpn" {
+    } else if mode == "--vpn" {
         // MODO NODO VPN (Abre TAP OS)
         tracing::info!("\n[*] INICIANDO MONTAJE TUN/TAP (Phase 10)");
         match start_virtual_adapter().await {
@@ -411,12 +424,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
             Err(e) => {
                  tracing::error!("    [X] Error crítico. Reintente como Administrador o instale tun/tap drivers: {}", e);
+                 wait_for_exit();
             }
         }
-    } else if args[1] == "--say" {
+    } else if mode == "--say" {
         // MODO COMUNIDAD: Enviar mensaje al desarrollador
         if args.len() < 4 {
             tracing::error!("USO: ipv7-core --say <categoria> <\"mensaje\">\n  Categorías: bug | feature | hello | contrib");
+            wait_for_exit();
             return Ok(());
         }
         let category = &args[2];
@@ -432,10 +447,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tracing::info!("  Gracias por contribuir a la Red IPv7.");
         } else {
             tracing::error!("[X] No se pudo entregar el mensaje. ¿Hay conexión a internet?");
+            wait_for_exit();
         }
     } else {
-         tracing::error!("Argumentos inválidos.");
+         tracing::error!("Argumentos inválidos: {}", mode);
+         tracing::error!("USO: ipv7-core [--listen] | [--connect] | [--cascade] | [--vpn] | [--ping] | [--say]");
+         wait_for_exit();
     }
 
     Ok(())
+}
+
+/// Función de ayuda para evitar que la ventana de consola se cierre inmediatamente en Windows.
+fn wait_for_exit() {
+    use std::io::{self, Read};
+    println!("\nPresione Enter para salir...");
+    let mut buffer = [0; 1];
+    let _ = io::stdin().read_exact(&mut buffer);
 }
