@@ -1,5 +1,5 @@
 //! main.rs
-//! IPv7 Core v1.1.1 — Motor Soberano P2P con Bootstrap Multicapa, Kademlia DHT y Criptografía Real
+//! IPv7 Core v1.1.3 — Motor Soberano P2P con Bootstrap Multicapa, Kademlia DHT y Criptografía Real
 #![allow(dead_code)]
 
 mod config;
