@@ -15,14 +15,15 @@ pub struct Ipv7Address {
     public_key: VerifyingKey,
 }
 
-impl Ipv7Address {
-    /// Convierte la clave pública en una dirección legible y ruteable (ej. id://xxxxx)
-    pub fn to_string(&self) -> String {
+impl std::fmt::Display for Ipv7Address {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let bytes = self.public_key.as_bytes();
         let encoded = bs58::encode(bytes).into_string();
-        format!("id://{}", encoded)
+        write!(f, "id://{}", encoded)
     }
+}
 
+impl Ipv7Address {
     /// Obtiene los bytes crudos de la clave pública para verificación matemática.
     pub fn as_bytes(&self) -> &[u8; 32] {
         self.public_key.as_bytes()

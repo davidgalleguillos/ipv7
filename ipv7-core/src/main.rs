@@ -525,7 +525,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             destination_id: target_pubkey,
             signature: vec![0u8; 64],
             ttl: config::master::DEFAULT_MESSAGE_TTL - 1,
-            nonce: nonce,
+            nonce,
             encrypted_payload: encrypted_body,
         };
 
