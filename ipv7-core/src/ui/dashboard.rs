@@ -20,6 +20,8 @@ use tokio::sync::mpsc;
 pub enum TuiEvent {
     LogMsg(String),
     NetworkStatus(String),
+    DhtUpdate(Vec<(String, String)>),
+    UserChatInput(String),
 }
 
 pub struct DashboardState {
@@ -28,7 +30,9 @@ pub struct DashboardState {
     pub status: String,
     pub dht_peers: Vec<(String, String)>,
     pub current_tab: usize,
-    pub announcements: Vec<(String, String)>, // (title, body)
+    pub announcements: Vec<(String, String)>,
+    pub chat_input: String,
+    pub chat_messages: Vec<String>,
 }
 
 impl DashboardState {
@@ -40,12 +44,15 @@ impl DashboardState {
             dht_peers,
             current_tab: 0,
             announcements: Vec::new(),
+            chat_input: String::new(),
+            chat_messages: Vec::new(),
         }
     }
 }
 
 pub async fn run_dashboard(
     mut rx: mpsc::Receiver<TuiEvent>,
+    tx_to_net: mpsc::Sender<TuiEvent>,
     initial_state: DashboardState,
 ) -> io::Result<()> {
     enable_raw_mode()?;
@@ -59,30 +66,64 @@ pub async fn run_dashboard(
     loop {
         terminal.draw(|f| draw_ui(f, &state))?;
 
-        // 1. Process network events from main loop
-        if let Ok(event) = rx.try_recv() {
+        // 1. Procesar eventos de red (Reactividad)
+        while let Ok(event) = rx.try_recv() {
             match event {
                 TuiEvent::LogMsg(msg) => {
                     state.logs.push(msg);
                     if state.logs.len() > 50 {
-                        state.logs.remove(0); // Keep buffer bound
+                        state.logs.remove(0);
                     }
                 }
                 TuiEvent::NetworkStatus(stat) => {
                     state.status = stat;
                 }
+                TuiEvent::DhtUpdate(peers) => {
+                    state.dht_peers = peers;
+                }
+                _ => {}
             }
         }
 
-        // 2. Interact with keyboard events (async check)
+        // 2. Interactuar con eventos de teclado (Entrada de Chat)
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char('q') => break,
-                    KeyCode::Char('1') => state.current_tab = 0,
-                    KeyCode::Char('2') => state.current_tab = 1,
-                    KeyCode::Char('3') => state.current_tab = 2,
-                    _ => {}
+                // Si estamos en la pestaña 3 (Comunidad), permitimos escribir
+                if state.current_tab == 2 {
+                    match key.code {
+                        KeyCode::Char(c) => {
+                            state.chat_input.push(c);
+                        }
+                        KeyCode::Backspace => {
+                            state.chat_input.pop();
+                        }
+                        KeyCode::Enter => {
+                            if !state.chat_input.is_empty() {
+                                let msg = state.chat_input.clone();
+                                state.chat_messages.push(format!("[Tú] {}", msg));
+                                state.chat_input.clear();
+                                let _ = tx_to_net.send(TuiEvent::UserChatInput(msg)).await;
+                            }
+                        }
+                        KeyCode::Esc => state.current_tab = 0,
+                        _ => {}
+                    }
+                }
+
+                // Control de navegación general (a menos que estemos escribiendo)
+                if state.current_tab != 2 || matches!(key.code, KeyCode::F(1) | KeyCode::F(2) | KeyCode::F(3)) {
+                     match key.code {
+                        KeyCode::Char('q') => break,
+                        KeyCode::Char('1') | KeyCode::F(1) => state.current_tab = 0,
+                        KeyCode::Char('2') | KeyCode::F(2) => state.current_tab = 1,
+                        KeyCode::Char('3') | KeyCode::F(3) => state.current_tab = 2,
+                        _ => {}
+                    }
+                }
+                
+                // Salida de emergencia si no se puede escribir
+                if key.code == KeyCode::Char('q') && state.chat_input.is_empty() {
+                    break;
                 }
             }
         }
@@ -137,23 +178,32 @@ fn draw_ui(f: &mut ratatui::Frame, state: &DashboardState) {
         );
         f.render_widget(dht_widget, chunks[0]);
     } else {
-        let mut text = String::from("ANUNCIOS DEL DESARROLLADOR\n");
+        let mut text = String::from("ANUNCIOS Y CHAT COMUNITARIO\n");
         text.push_str("══════════════════════════════════════════════════════\n\n");
-        if state.announcements.is_empty() {
-            text.push_str("Bienvenido a la red IPv7.\n\n");
-            text.push_str("No hay anuncios del desarrollador por ahora.\n\n");
-            text.push_str("Para enviar feedback:\n");
-            text.push_str("  ipv7-core --say feature \'Quiero X funcionalidad\'\n");
-            text.push_str("  ipv7-core --say bug \'El nodo no inicia en Linux\'\n");
-            text.push_str("  ipv7-core --say hello \'Hola desde Argentina!\'\n");
-        } else {
-            for (title, body) in &state.announcements {
-                text.push_str(&format!("[ {} ]\n{}\n\n", title, body));
-            }
+        
+        // Mostrar anuncios primero
+        for (title, body) in &state.announcements {
+            text.push_str(&format!("[!] {}: {}\n", title, body));
         }
+        if !state.announcements.is_empty() { text.push_str("\n---\n\n"); }
+
+        // Historial de Chat
+        if state.chat_messages.is_empty() {
+            text.push_str("¡Escribe un mensaje al desarrollador abajo para dar feedback!\n\n");
+        } else {
+            for msg in state.chat_messages.iter().rev().take(10).rev() {
+                text.push_str(&format!("{}\n", msg));
+            }
+            text.push_str("\n");
+        }
+
+        // Caja de entrada
+        text.push_str(&format!("> {}", state.chat_input));
+        text.push_str("█"); // Cursor simulado
+
         let comm_widget = Paragraph::new(text).block(
             Block::default()
-                .title(" [ (1) Telemetría | (2) Kademlia | (★ 3) Comunidad & Anuncios ] ")
+                .title(" [ (1) Telemetría | (2) Kademlia | (★ 3) Feedback & Community Chat ] ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::LightBlue)),
         );

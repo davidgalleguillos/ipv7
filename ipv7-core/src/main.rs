@@ -1,5 +1,5 @@
 //! main.rs
-//! IPv7 Core v1.1.0 — Motor Soberano P2P con Bootstrap Multicapa, Kademlia DHT y Criptografía Real
+//! IPv7 Core v1.3.0 — Motor Soberano P2P con Bootstrap Multicapa, Kademlia DHT y Chat Comunitario
 #![allow(dead_code)]
 
 mod config;
@@ -11,6 +11,7 @@ mod ui;
 use identity::dht::{DhtPayload, DhtRegistry};
 use identity::keys::NodeIdentity;
 use std::env;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use transport::community::{fetch_announcements, send_community_message};
 use transport::crypto::SymmetricTunnel;
@@ -68,6 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let dht_clone = dht.clone();
         let sessions_clone = sessions.clone();
         let my_address_str = my_node.address.to_string();
+        let my_node_net = my_node.clone();
 
         // Desplazar el bucle de red UDP a una tarea asíncrona de fondo
         tokio::spawn(async move {
@@ -115,7 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 bincode::serialize(&DhtPayload::Pong).unwrap();
                                             let mut p_packet = Ipv7Packet {
                                                 version: 7,
-                                                source_id: *my_node.address.as_bytes(),
+                                                source_id: *my_node_net.address.as_bytes(),
                                                 destination_id: packet.source_id,
                                                 signature: vec![0u8; 64],
                                                 ttl: config::master::DEFAULT_MESSAGE_TTL,
@@ -128,7 +130,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             sm.extend_from_slice(&p_packet.ttl.to_le_bytes());
                                             sm.extend_from_slice(&p_packet.encrypted_payload);
                                             p_packet.signature =
-                                                my_node.sign(&sm).to_bytes().to_vec();
+                                                my_node_net.sign(&sm).to_bytes().to_vec();
                                             let _ = relay
                                                 .send_raw_packet(
                                                     &p_packet.to_bytes().unwrap(),
@@ -165,7 +167,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let resp_bin = bincode::serialize(&resp_payload).unwrap();
                                     let mut resp_packet = Ipv7Packet {
                                         version: 7,
-                                        source_id: *my_node.address.as_bytes(),
+                                        source_id: *my_node_net.address.as_bytes(),
                                         destination_id: packet.source_id,
                                         signature: vec![0u8; 64],
                                         ttl: config::master::DEFAULT_MESSAGE_TTL,
@@ -178,7 +180,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     sig_msg.extend_from_slice(&resp_packet.ttl.to_le_bytes());
                                     sig_msg.extend_from_slice(&resp_packet.encrypted_payload);
                                     resp_packet.signature =
-                                        my_node.sign(&sig_msg).to_bytes().to_vec();
+                                        my_node_net.sign(&sig_msg).to_bytes().to_vec();
 
                                     if let Some(target_addr) =
                                         dht_clone.lookup(&packet.source_id).await
@@ -279,6 +281,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
 
+        // ═══════════════════════════════════════════
+        // FASE 16: Hilo de Sincronización UI & Chat
+        // ═══════════════════════════════════════════
+        let tx_ui = tx.clone();
+        let dht_ui = dht.clone();
+        let my_id_chat = my_node.address.to_string();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                let peers = dht_ui.snapshot_peers().await;
+                let _ = tx_ui.send(TuiEvent::DhtUpdate(peers)).await;
+            }
+        });
+
         // Hilo principal queda atrapado re-dibujando el TUI
         // Cargar anuncios del desarrollador desde Firebase
         let dev_announcements = fetch_announcements().await;
@@ -288,7 +304,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .into_iter()
             .map(|a| (a.title, a.body))
             .collect();
-        run_dashboard(rx, state).await?;
+
+        // Canal de retorno para procesar Chat Input desde la UI
+        let (tx_back, mut rx_back) = mpsc::channel::<TuiEvent>(10);
+        let my_id_b58 = my_node.address.to_string();
+        tokio::spawn(async move {
+            while let Some(event) = rx_back.recv().await {
+                if let TuiEvent::UserChatInput(msg) = event {
+                    let _ok = send_community_message(&my_id_b58, "chat", &msg).await;
+                }
+            }
+        });
+
+        run_dashboard(rx, tx_back, state).await?;
     } else if mode == "--ping" {
         // MODO DESCUBRIMIENTO (Enviando PING para popular topología)
         if args.len() < 4 {

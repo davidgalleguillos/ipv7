@@ -10,7 +10,7 @@ use rand_core::OsRng;
 use zeroize::Zeroize;
 
 /// Dirección criptográfica pública de un Nodo (identidad verificable).
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub struct Ipv7Address {
     public_key: VerifyingKey,
 }
@@ -32,6 +32,7 @@ impl Ipv7Address {
 
 /// Identidad Soberana de un Nodo.
 /// Contiene la clave privada ultra-secreta y la dirección pública que expone al mundo.
+#[derive(Clone, Debug)]
 pub struct NodeIdentity {
     pub address: Ipv7Address,
     /// Clave privada: el nodo debe firmar paquetes con esto
