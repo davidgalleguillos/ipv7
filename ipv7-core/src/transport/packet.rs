@@ -49,6 +49,20 @@ impl Ipv7Packet {
         bincode::deserialize(data)
     }
 
+    /// Obtiene los bytes que deben ser firmados/verificados.
+    pub fn get_signing_message(&self) -> Vec<u8> {
+        let mut message = Vec::new();
+        message.extend_from_slice(&self.version.to_le_bytes());
+        message.extend_from_slice(&self.source_id);
+        message.extend_from_slice(&self.destination_id);
+        message.extend_from_slice(&self.ttl.to_le_bytes());
+        message.extend_from_slice(&self.timestamp.to_le_bytes());
+        message.extend_from_slice(&self.sequence_number.to_le_bytes());
+        message.extend_from_slice(&self.nonce);
+        message.extend_from_slice(&self.encrypted_payload);
+        message
+    }
+
     /// Autenticar Matemáticamente el Origen.
     /// Valida que la firma corresponde realmente al `source_id` usando la librería ed25519.
     pub fn verify_origin_signature(&self) -> bool {
@@ -64,15 +78,7 @@ impl Ipv7Packet {
         let signature = Signature::from_bytes(&sig_bytes);
 
         // FIRMA INDUSTRIAL v2.0: Incluye todos los metadatos para evitar manipulación.
-        let mut message_to_verify = Vec::new();
-        message_to_verify.extend_from_slice(&self.version.to_le_bytes());
-        message_to_verify.extend_from_slice(&self.source_id);
-        message_to_verify.extend_from_slice(&self.destination_id);
-        message_to_verify.extend_from_slice(&self.ttl.to_le_bytes());
-        message_to_verify.extend_from_slice(&self.timestamp.to_le_bytes());
-        message_to_verify.extend_from_slice(&self.sequence_number.to_le_bytes());
-        message_to_verify.extend_from_slice(&self.nonce);
-        message_to_verify.extend_from_slice(&self.encrypted_payload);
+        let message_to_verify = self.get_signing_message();
 
         signer_pub_pub
             .verify(&message_to_verify, &signature)

@@ -50,6 +50,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sessions = SessionManager::new();
     let replay_filter = ReplayFilter::new();
 
+    // FASE 19: Tarea de Mantenimiento Periódico (K-Buckets + Replay Cache)
+    let dht_maint = dht.clone();
+    let replay_maint = replay_filter.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            dht_maint.maintenance().await;
+            replay_maint.maintenance().await;
+        }
+    });
+
     if mode == "--listen" {
         // ... (resto del código del modo listen igual)
         // MODO NODO PASIVO (Esperando conexión)
@@ -77,10 +89,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Desplazar el bucle de red UDP a una tarea asíncrona de fondo
         tokio::spawn(async move {
             let mut buf = [0u8; config::master::DEFAULT_PACKET_SIZE];
+            let mut rate_limit: std::collections::HashMap<std::net::IpAddr, (usize, u64)> = std::collections::HashMap::new();
+
             loop {
                 if let Ok((amt, src)) = relay.socket.recv_from(&mut buf).await {
+                    // 1. EARLY DROP: Validación de tamaño mínimo (Basado en el frame Ipv7Packet)
+                    if amt < 185 {
+                        continue;
+                    }
+
+                    // 2. RATE LIMITING: Por IP (Antes de deserialización costosa)
+                    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+                    let ip = src.ip();
+                    let (count, last_ts) = rate_limit.entry(ip).or_insert((0, now));
+                    if *last_ts != now {
+                        *count = 1;
+                        *last_ts = now;
+                    } else {
+                        *count += 1;
+                    }
+                    if *count > 100 { // Límite de 100 pkt/sec por IP
+                        continue;
+                    }
+
                     let msg = format!(
-                        "[!] Paquete IPv7 crudo recibido desde {} ({} bytes)",
+                        "[!] Paquete IPv7 recibido desde {} ({} bytes)",
                         src, amt
                     );
                     tracing::info!("{}", msg);
@@ -146,17 +179,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 nonce,
                                                 encrypted_payload: pong_bin,
                                             };
-                                            let mut sm = Vec::new();
-                                            sm.extend_from_slice(&p_packet.version.to_le_bytes());
-                                            sm.extend_from_slice(&p_packet.source_id);
-                                            sm.extend_from_slice(&p_packet.destination_id);
-                                            sm.extend_from_slice(&p_packet.ttl.to_le_bytes());
-                                            sm.extend_from_slice(&p_packet.timestamp.to_le_bytes());
-                                            sm.extend_from_slice(&p_packet.sequence_number.to_le_bytes());
-                                            sm.extend_from_slice(&p_packet.nonce);
-                                            sm.extend_from_slice(&p_packet.encrypted_payload);
                                             p_packet.signature =
-                                                my_node_net.sign(&sm).to_bytes().to_vec();
+                                                my_node_net.sign(&p_packet.get_signing_message()).to_bytes().to_vec();
                                             let _ = relay
                                                 .send_raw_packet(
                                                     &p_packet.to_bytes().unwrap(),
@@ -206,17 +230,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         nonce,
                                         encrypted_payload: resp_bin,
                                     };
-                                    let mut sig_msg = Vec::new();
-                                    sig_msg.extend_from_slice(&resp_packet.version.to_le_bytes());
-                                    sig_msg.extend_from_slice(&resp_packet.source_id);
-                                    sig_msg.extend_from_slice(&resp_packet.destination_id);
-                                    sig_msg.extend_from_slice(&resp_packet.ttl.to_le_bytes());
-                                    sig_msg.extend_from_slice(&resp_packet.timestamp.to_le_bytes());
-                                    sig_msg.extend_from_slice(&resp_packet.sequence_number.to_le_bytes());
-                                    sig_msg.extend_from_slice(&resp_packet.nonce);
-                                    sig_msg.extend_from_slice(&resp_packet.encrypted_payload);
                                     resp_packet.signature =
-                                        my_node_net.sign(&sig_msg).to_bytes().to_vec();
+                                        my_node_net.sign(&resp_packet.get_signing_message()).to_bytes().to_vec();
 
                                     if let Some(target_addr) =
                                         dht_clone.lookup(&packet.source_id).await

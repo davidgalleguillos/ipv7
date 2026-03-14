@@ -74,16 +74,7 @@ pub async fn discover_lan_peers(my_node: &NodeIdentity, dht: &DhtRegistry) -> us
     };
 
     // Firma Real Crítica (Resuelve alerta de Firma Inválida)
-    let mut sm = Vec::new();
-    sm.extend_from_slice(&broadcast_packet.version.to_le_bytes());
-    sm.extend_from_slice(&broadcast_packet.source_id);
-    sm.extend_from_slice(&broadcast_packet.destination_id);
-    sm.extend_from_slice(&broadcast_packet.ttl.to_le_bytes());
-    sm.extend_from_slice(&broadcast_packet.timestamp.to_le_bytes());
-    sm.extend_from_slice(&broadcast_packet.sequence_number.to_le_bytes());
-    sm.extend_from_slice(&broadcast_packet.nonce);
-    sm.extend_from_slice(&broadcast_packet.encrypted_payload);
-    broadcast_packet.signature = my_node.sign(&sm).to_bytes().to_vec();
+    broadcast_packet.signature = my_node.sign(&broadcast_packet.get_signing_message()).to_bytes().to_vec();
 
     let broadcast_addr = format!("255.255.255.255:{}", IPV7_DEFAULT_PORT);
     if let Ok(raw) = broadcast_packet.to_bytes() {
