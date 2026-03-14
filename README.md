@@ -109,15 +109,15 @@ El motor opera 100% desde terminal. Al arrancar, el nodo genera su **Identidad S
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                    IPv7 Core v1.1                   │
+│                    IPv7 Core v1.3.0                  │
 ├─────────────┬───────────────┬───────────────────────┤
 │  Identidad  │   Transporte  │         UI            │
 │             │               │                       │
 │  ED25519    │  UDP Overlay  │  Ratatui TUI          │
-│  X25519 DH  │  Kademlia DHT │  3 Tabs               │
+│  X25519 DH  │  K-Bucket DHT │  3 Tabs               │
 │  ChaCha20   │  Onion Relay  │  Telemetría           │
 │  Zeroize    │  TUN/TAP      │  DHT Explorer         │
-│             │  SessionMgr   │  Comunidad            │
+│  Replay LRU │  SessionMgr   │  Comunidad            │
 │             │  Bootstrap:   │                       │
 │             │   LAN mDNS    │                       │
 │             │   Firebase    │                       │
@@ -133,6 +133,57 @@ El motor opera 100% desde terminal. Al arrancar, el nodo genera su **Identidad S
 - **Red:** UDP nativo + Tokio async sockets
 - **Bootstrap Global:** Firebase Realtime Database (REST)
 - **Serialización:** Bincode (binario eficiente) + Serde JSON (Firebase)
+- **Routing DHT:** K-Buckets Kademlia (`lru` crate)
+
+---
+
+## 🔐 Seguridad de Paquetes (v1.3.0)
+
+Cada paquete IPv7 está firmado matemáticamente con ED25519 e incluye:
+
+| Campo | Descripción |
+|---|---|
+| `version` | Versión del protocolo (v2) |
+| `source_id` | Llave pública ED25519 del emisor (32 bytes) |
+| `destination_id` | Llave pública del destinatario |
+| `nonce` | Sal criptográfica aleatoria de 32 bytes (incluida en la firma) |
+| `timestamp` | Marca Unix (segundos) — ventana de ±60 segundos |
+| `sequence_number` | Contador monotónico por flujo |
+| `signature` | Firma ED25519 sobre **todos** los campos anteriores + payload cifrado |
+
+### Protección contra Replay
+
+El motor `ReplayFilter` valida cada paquete entrante antes de verificar la firma:
+
+1. **Anti-Aging**: Descarta paquetes con `timestamp` fuera de la ventana de 60 segundos.
+2. **Nonce cache LRU**: Cada peer tiene un cache acotado de 512 nonces recientes. Un nonce ya visto es rechazado inmediatamente.
+3. **Secuencia monotónica**: El `sequence_number` debe ser siempre creciente por peer.
+4. **Rate limiting**: El receptor descarta paquetes que superen 50 pps por IP de origen antes de realizar cualquier operación criptográfica costosa.
+
+---
+
+## 🌐 DHT Kademlia K-Bucket (v1.3.0)
+
+La tabla de routing reemplaza el HashMap plano original con una implementación inspirada en Kademlia:
+
+- **256 buckets** — uno por posición de bit en el espacio de claves de 256 bits (XOR).
+- **k = 20** — tamaño máximo por bucket, con evicción LRU automática.
+- **Metadatos de peer**: `last_seen` (timestamp), `failed_pings` (contador de fallos), `reputation` (opcional).
+- **TTL = 10 min** — peers inactivos se excluyen de consultas y se limpian periódicamente.
+- **Evicción activa**: 3 pings fallidos consecutivos eliminan el peer del bucket.
+- **Memoria acotada**: máximo 256 × 20 = 5 120 peers por nodo (≈660 KB).
+
+### API pública (`DhtRegistry`)
+
+```rust
+dht.register_node(pubkey, address).await;          // Insertar/actualizar peer
+dht.lookup(&pubkey).await;                         // Búsqueda exacta → Option<String>
+dht.get_closest_peers(&target, k).await;           // k vecinos más cercanos por XOR
+dht.peer_count().await;                            // Peers activos (sin TTL expirado)
+dht.snapshot_peers().await;                        // Vec<(Base58_ID, endpoint)> para TUI
+dht.evict_stale_peers().await;                     // Limpieza periódica
+dht.record_failed_ping(&pubkey).await;             // Registrar fallo de ping
+```
 
 ---
 
