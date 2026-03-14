@@ -77,8 +77,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Desplazar el bucle de red UDP a una tarea asíncrona de fondo
         tokio::spawn(async move {
             let mut buf = [0u8; config::master::DEFAULT_PACKET_SIZE];
+            // Rate limiter simple: contador de paquetes por IP en ventana de 1 segundo.
+            let mut rate_counts: std::collections::HashMap<std::net::IpAddr, (u32, std::time::Instant)> =
+                std::collections::HashMap::new();
+            const RATE_LIMIT_PPS: u32 = 50; // paquetes por segundo por IP
+
             loop {
                 if let Ok((amt, src)) = relay.socket.recv_from(&mut buf).await {
+                    // ═══════════════════════════════════════════
+                    // Rate limiting: drop temprano antes de deserializar o verificar firma
+                    // ═══════════════════════════════════════════
+                    let src_ip = src.ip();
+                    let now_inst = std::time::Instant::now();
+                    let entry = rate_counts.entry(src_ip).or_insert((0, now_inst));
+                    if now_inst.duration_since(entry.1).as_secs() >= 1 {
+                        *entry = (1, now_inst);
+                    } else {
+                        entry.0 += 1;
+                        if entry.0 > RATE_LIMIT_PPS {
+                            tracing::warn!("[Rate] Descartando paquete de {} (límite {}pps)", src_ip, RATE_LIMIT_PPS);
+                            continue;
+                        }
+                    }
+
                     let msg = format!(
                         "[!] Paquete IPv7 crudo recibido desde {} ({} bytes)",
                         src, amt
@@ -683,7 +704,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let final_raw_bytes = outer_signed.to_bytes().unwrap();
 
-        let net_relay = OverlayRelay::start_listener("0.0.0.0").await?;
         tracing::info!(
             "[🚀] Disparando Cebolla Exterior hacia el Relé IP -> {}",
             relay_address

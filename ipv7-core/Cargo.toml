@@ -25,6 +25,9 @@ thiserror = "1.0"
 bs58 = "0.5.1"
 serde-big-array = "0.5.1"
 
+# LRU cache para K-Buckets y replay protection
+lru = "0.12"
+
 # Telemetría y Logs (Fase 4)
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
