@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 // Ningún campo viaja en "texto claro" entendible para un humano/router.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Ipv7Packet {
-    /// Versión del protocolo (para compatibilidad).
+    /// Versión del protocolo (v2 para protección contra Replay).
     pub version: u8,
 
     /// Llave pública plana del Nodo Emisor (32 bytes).
@@ -19,16 +19,22 @@ pub struct Ipv7Packet {
     pub destination_id: [u8; 32],
 
     /// Firma matemática que garantiza la inmutabilidad y autenticidad
-    /// de la cabecera del mensaje. (64 bytes).
+    /// de TODOS los campos. (64 bytes).
     pub signature: Vec<u8>,
 
     /// Metadatos (LifeCycle/TTL).
     pub ttl: u64,
 
-    /// Sal criptográfica (Nonce) obligatoria para el cifrador asimétrico (24 bytes).
-    pub nonce: Vec<u8>,
+    /// Marca de tiempo para evitar Replay (Unix Secs).
+    pub timestamp: u64,
 
-    /// El payload 100% cifrado con XChaCha20Poly1305.
+    /// Número de secuencia incremental por flujo.
+    pub sequence_number: u64,
+
+    /// Sal criptográfica (Nonce) real (32 bytes).
+    pub nonce: [u8; 32],
+
+    /// El payload cifrado con XChaCha20Poly1305.
     pub encrypted_payload: Vec<u8>,
 }
 
@@ -57,12 +63,15 @@ impl Ipv7Packet {
         };
         let signature = Signature::from_bytes(&sig_bytes);
 
-        // Lo que se firmó fue la concatenación del Origen y el Destino para evitar Relay Attacks.
+        // FIRMA INDUSTRIAL v2.0: Incluye todos los metadatos para evitar manipulación.
         let mut message_to_verify = Vec::new();
+        message_to_verify.extend_from_slice(&self.version.to_le_bytes());
         message_to_verify.extend_from_slice(&self.source_id);
         message_to_verify.extend_from_slice(&self.destination_id);
         message_to_verify.extend_from_slice(&self.ttl.to_le_bytes());
-        // Incluimos la integridad del payload en la firma de identidad
+        message_to_verify.extend_from_slice(&self.timestamp.to_le_bytes());
+        message_to_verify.extend_from_slice(&self.sequence_number.to_le_bytes());
+        message_to_verify.extend_from_slice(&self.nonce);
         message_to_verify.extend_from_slice(&self.encrypted_payload);
 
         signer_pub_pub

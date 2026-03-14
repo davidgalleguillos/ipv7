@@ -1,5 +1,5 @@
 //! main.rs
-//! IPv7 Core v1.3.0 — Motor Soberano P2P con Bootstrap Multicapa, Kademlia DHT y Chat Comunitario
+//! IPv7 Core v2.0.0 — Red Soberana Industrial con Protección contra Replay y Kademlia DHT
 #![allow(dead_code)]
 
 mod config;
@@ -11,7 +11,7 @@ mod ui;
 use identity::dht::{DhtPayload, DhtRegistry};
 use identity::keys::NodeIdentity;
 use std::env;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use transport::community::{fetch_announcements, send_community_message};
 use transport::crypto::SymmetricTunnel;
@@ -20,6 +20,7 @@ use transport::handshake::{HandshakeResponse, HandshakeSession};
 use transport::overlay::OverlayRelay;
 use transport::packet::Ipv7Packet;
 use transport::relay::RelayInstruction;
+use transport::replay::ReplayFilter;
 use transport::session::SessionManager;
 use transport::virtual_adapter::start_virtual_adapter;
 use ui::dashboard::{run_dashboard, DashboardState, TuiEvent};
@@ -47,6 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Kademlia DHT Real Orgánico (Phase 13)
     let dht = DhtRegistry::new(*my_node.address.as_bytes());
     let sessions = SessionManager::new();
+    let replay_filter = ReplayFilter::new();
 
     if mode == "--listen" {
         // ... (resto del código del modo listen igual)
@@ -68,6 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let tx_clone = tx.clone();
         let dht_clone = dht.clone();
         let sessions_clone = sessions.clone();
+        let replay_filter_clone = replay_filter.clone();
         let my_address_str = my_node.address.to_string();
         let my_node_net = my_node.clone();
 
@@ -90,6 +93,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     "    [✓] Estructura IPv7 Válida.".to_string(),
                                 ))
                                 .await;
+
+                                // ═══════════════════════════════════════════
+                                // FASE 17: Protección contra Replay (v2.0)
+                                // ═══════════════════════════════════════════
+                                if let Err(e) = replay_filter_clone.verify_freshness(
+                                    &packet.source_id, 
+                                    packet.timestamp, 
+                                    &packet.nonce, 
+                                    packet.sequence_number
+                                ).await {
+                                    let _ = tx_clone.send(TuiEvent::LogMsg(format!("    [X] ALERTA DE SEGURIDAD: {}", e))).await;
+                                    continue;
+                                }
 
                             if packet.verify_origin_signature() {
                                 let _ = tx_clone
@@ -115,19 +131,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             );
                                             let pong_bin =
                                                 bincode::serialize(&DhtPayload::Pong).unwrap();
+                                            let mut nonce = [0u8; 32];
+                                            rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce);
+                                            let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+
                                             let mut p_packet = Ipv7Packet {
-                                                version: 7,
+                                                version: 2,
                                                 source_id: *my_node_net.address.as_bytes(),
                                                 destination_id: packet.source_id,
                                                 signature: vec![0u8; 64],
                                                 ttl: config::master::DEFAULT_MESSAGE_TTL,
-                                                nonce: vec![0],
+                                                timestamp,
+                                                sequence_number: 0, // En v2.1 implementaremos tracking de secuencia saliente
+                                                nonce,
                                                 encrypted_payload: pong_bin,
                                             };
                                             let mut sm = Vec::new();
+                                            sm.extend_from_slice(&p_packet.version.to_le_bytes());
                                             sm.extend_from_slice(&p_packet.source_id);
                                             sm.extend_from_slice(&p_packet.destination_id);
                                             sm.extend_from_slice(&p_packet.ttl.to_le_bytes());
+                                            sm.extend_from_slice(&p_packet.timestamp.to_le_bytes());
+                                            sm.extend_from_slice(&p_packet.sequence_number.to_le_bytes());
+                                            sm.extend_from_slice(&p_packet.nonce);
                                             sm.extend_from_slice(&p_packet.encrypted_payload);
                                             p_packet.signature =
                                                 my_node_net.sign(&sm).to_bytes().to_vec();
@@ -165,19 +191,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         ephemeral_public_key: local_pubkey,
                                     };
                                     let resp_bin = bincode::serialize(&resp_payload).unwrap();
+                                    let mut nonce = [0u8; 32];
+                                    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce);
+                                    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+
                                     let mut resp_packet = Ipv7Packet {
-                                        version: 7,
+                                        version: 2,
                                         source_id: *my_node_net.address.as_bytes(),
                                         destination_id: packet.source_id,
                                         signature: vec![0u8; 64],
                                         ttl: config::master::DEFAULT_MESSAGE_TTL,
-                                        nonce: vec![0],
+                                        timestamp,
+                                        sequence_number: 0,
+                                        nonce,
                                         encrypted_payload: resp_bin,
                                     };
                                     let mut sig_msg = Vec::new();
+                                    sig_msg.extend_from_slice(&resp_packet.version.to_le_bytes());
                                     sig_msg.extend_from_slice(&resp_packet.source_id);
                                     sig_msg.extend_from_slice(&resp_packet.destination_id);
                                     sig_msg.extend_from_slice(&resp_packet.ttl.to_le_bytes());
+                                    sig_msg.extend_from_slice(&resp_packet.timestamp.to_le_bytes());
+                                    sig_msg.extend_from_slice(&resp_packet.sequence_number.to_le_bytes());
+                                    sig_msg.extend_from_slice(&resp_packet.nonce);
                                     sig_msg.extend_from_slice(&resp_packet.encrypted_payload);
                                     resp_packet.signature =
                                         my_node_net.sign(&sig_msg).to_bytes().to_vec();
@@ -286,7 +322,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // ═══════════════════════════════════════════
         let tx_ui = tx.clone();
         let dht_ui = dht.clone();
-        let my_id_chat = my_node.address.to_string();
+        let _my_id_chat = my_node.address.to_string();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(2)).await;
@@ -338,19 +374,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let relay = OverlayRelay::start_listener("0.0.0.0").await?;
 
         let ping_bin = bincode::serialize(&DhtPayload::Ping).unwrap();
+        let mut nonce = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce);
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+
         let mut p_packet = Ipv7Packet {
-            version: 7,
+            version: 2,
             source_id: *my_node.address.as_bytes(),
             destination_id: target_pubkey,
             signature: vec![0u8; 64],
             ttl: config::master::DEFAULT_MESSAGE_TTL,
-            nonce: vec![0],
+            timestamp,
+            sequence_number: 0,
+            nonce,
             encrypted_payload: ping_bin,
         };
         let mut sm = Vec::new();
+        sm.extend_from_slice(&p_packet.version.to_le_bytes());
         sm.extend_from_slice(&p_packet.source_id);
         sm.extend_from_slice(&p_packet.destination_id);
         sm.extend_from_slice(&p_packet.ttl.to_le_bytes());
+        sm.extend_from_slice(&p_packet.timestamp.to_le_bytes());
+        sm.extend_from_slice(&p_packet.sequence_number.to_le_bytes());
+        sm.extend_from_slice(&p_packet.nonce);
         sm.extend_from_slice(&p_packet.encrypted_payload);
         p_packet.signature = my_node.sign(&sm).to_bytes().to_vec();
 
@@ -407,20 +453,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Empaquetamos la llave pública efímera dentro del payload
         let payload_bin = bincode::serialize(&payload_struct).unwrap();
 
+        let mut nonce = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce);
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+
         let packet = Ipv7Packet {
-            version: 7,
+            version: 2,
             source_id: *my_node.address.as_bytes(),
             destination_id: target_pubkey,
             signature: vec![0u8; 64],
             ttl: config::master::DEFAULT_MESSAGE_TTL,
-            nonce: vec![0, 1, 2, 3, 4], // Simulación hasta Fase 4 (crypto tunnel)
+            timestamp,
+            sequence_number: 0,
+            nonce,
             encrypted_payload: payload_bin,
         };
 
         let mut raw_sig_message = Vec::new();
+        raw_sig_message.extend_from_slice(&packet.version.to_le_bytes());
         raw_sig_message.extend_from_slice(&packet.source_id);
         raw_sig_message.extend_from_slice(&packet.destination_id);
         raw_sig_message.extend_from_slice(&packet.ttl.to_le_bytes());
+        raw_sig_message.extend_from_slice(&packet.timestamp.to_le_bytes());
+        raw_sig_message.extend_from_slice(&packet.sequence_number.to_le_bytes());
+        raw_sig_message.extend_from_slice(&packet.nonce);
         raw_sig_message.extend_from_slice(&packet.encrypted_payload);
 
         let signature_bytes = my_node.sign(&raw_sig_message).to_bytes();
@@ -503,19 +559,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let net_relay = OverlayRelay::start_listener("0.0.0.0").await?;
         let handshake_session = HandshakeSession::new();
         let payload_bin = bincode::serialize(&handshake_session.create_payload()).unwrap();
+        let mut nonce = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce);
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+
         let mut hs_packet = Ipv7Packet {
-            version: 7,
+            version: 2,
             source_id: *my_node.address.as_bytes(),
             destination_id: target_pubkey,
             signature: vec![0u8; 64],
             ttl: config::master::DEFAULT_MESSAGE_TTL,
-            nonce: vec![0],
+            timestamp,
+            sequence_number: 0,
+            nonce,
             encrypted_payload: payload_bin,
         };
         let mut sig_msg = Vec::new();
+        sig_msg.extend_from_slice(&hs_packet.version.to_le_bytes());
         sig_msg.extend_from_slice(&hs_packet.source_id);
         sig_msg.extend_from_slice(&hs_packet.destination_id);
         sig_msg.extend_from_slice(&hs_packet.ttl.to_le_bytes());
+        sig_msg.extend_from_slice(&hs_packet.timestamp.to_le_bytes());
+        sig_msg.extend_from_slice(&hs_packet.sequence_number.to_le_bytes());
+        sig_msg.extend_from_slice(&hs_packet.nonce);
         sig_msg.extend_from_slice(&hs_packet.encrypted_payload);
         hs_packet.signature = my_node.sign(&sig_msg).to_bytes().to_vec();
 
@@ -547,20 +613,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (nonce, encrypted_body) = tunnel.encrypt_payload(secret_msg).unwrap();
 
         // Paquete Cebolla INTERNO (El que verá el destino final)
+        let inner_timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
         let inner_packet = Ipv7Packet {
-            version: 7,
+            version: 2,
             source_id: *my_node.address.as_bytes(), // Firma final será de nosotros
             destination_id: target_pubkey,
             signature: vec![0u8; 64],
             ttl: config::master::DEFAULT_MESSAGE_TTL - 1,
+            timestamp: inner_timestamp,
+            sequence_number: 0,
             nonce,
             encrypted_payload: encrypted_body,
         };
 
         let mut inner_sig_msg = Vec::new();
+        inner_sig_msg.extend_from_slice(&inner_packet.version.to_le_bytes());
         inner_sig_msg.extend_from_slice(&inner_packet.source_id);
         inner_sig_msg.extend_from_slice(&inner_packet.destination_id);
         inner_sig_msg.extend_from_slice(&inner_packet.ttl.to_le_bytes());
+        inner_sig_msg.extend_from_slice(&inner_packet.timestamp.to_le_bytes());
+        inner_sig_msg.extend_from_slice(&inner_packet.sequence_number.to_le_bytes());
+        inner_sig_msg.extend_from_slice(&inner_packet.nonce);
         inner_sig_msg.extend_from_slice(&inner_packet.encrypted_payload);
 
         let inner_signed = Ipv7Packet {
@@ -578,20 +651,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let relay_payload_bin = bincode::serialize(&relay_instruction).unwrap();
 
         // Paquete Cebolla EXTERNO (Solo lo ve el Relé)
+        let mut outer_nonce = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut outer_nonce);
+        let outer_timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+
         let outer_packet = Ipv7Packet {
-            version: 7,
+            version: 2,
             source_id: *my_node.address.as_bytes(),
             destination_id: relay_pubkey,
             signature: vec![0u8; 64],
             ttl: config::master::DEFAULT_MESSAGE_TTL,
-            nonce: vec![0, 1],
+            timestamp: outer_timestamp,
+            sequence_number: 0,
+            nonce: outer_nonce,
             encrypted_payload: relay_payload_bin,
         };
 
         let mut outer_sig_msg = Vec::new();
+        outer_sig_msg.extend_from_slice(&outer_packet.version.to_le_bytes());
         outer_sig_msg.extend_from_slice(&outer_packet.source_id);
         outer_sig_msg.extend_from_slice(&outer_packet.destination_id);
         outer_sig_msg.extend_from_slice(&outer_packet.ttl.to_le_bytes());
+        outer_sig_msg.extend_from_slice(&outer_packet.timestamp.to_le_bytes());
+        outer_sig_msg.extend_from_slice(&outer_packet.sequence_number.to_le_bytes());
+        outer_sig_msg.extend_from_slice(&outer_packet.nonce);
         outer_sig_msg.extend_from_slice(&outer_packet.encrypted_payload);
 
         let outer_signed = Ipv7Packet {

@@ -56,22 +56,32 @@ pub async fn discover_lan_peers(my_node: &NodeIdentity, dht: &DhtRegistry) -> us
         Err(_) => return 0,
     };
 
+    let mut nonce = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce);
+    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+
     // Construir paquete IPv7 mínimo para el broadcast
     let mut broadcast_packet = Ipv7Packet {
-        version: 7,
+        version: 2,
         source_id: *my_node.address.as_bytes(),
         destination_id: [0xFFu8; 32], // Broadcast ID
         signature: vec![0u8; 64],
         ttl: DEFAULT_MESSAGE_TTL,
-        nonce: vec![0],
+        timestamp,
+        sequence_number: 0,
+        nonce,
         encrypted_payload: ping_bytes,
     };
 
     // Firma Real Crítica (Resuelve alerta de Firma Inválida)
     let mut sm = Vec::new();
+    sm.extend_from_slice(&broadcast_packet.version.to_le_bytes());
     sm.extend_from_slice(&broadcast_packet.source_id);
     sm.extend_from_slice(&broadcast_packet.destination_id);
     sm.extend_from_slice(&broadcast_packet.ttl.to_le_bytes());
+    sm.extend_from_slice(&broadcast_packet.timestamp.to_le_bytes());
+    sm.extend_from_slice(&broadcast_packet.sequence_number.to_le_bytes());
+    sm.extend_from_slice(&broadcast_packet.nonce);
     sm.extend_from_slice(&broadcast_packet.encrypted_payload);
     broadcast_packet.signature = my_node.sign(&sm).to_bytes().to_vec();
 

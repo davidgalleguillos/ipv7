@@ -22,32 +22,34 @@ impl SymmetricTunnel {
         }
     }
 
-    /// Cifra implacablemente los datos hacia la infraestructura superpuesta.
-    /// Devuelve un Nonce aleatorio y el texto cifrado, o Error.
+    /// Cifra implacablemente los datos con XChaCha20-Poly1305.
+    /// Devuelve un Nonce real de 32 bytes (estándar IPv7 v2.0) y el texto cifrado.
     pub fn encrypt_payload(
         &self,
         plain_payload: &[u8],
-    ) -> Result<(Vec<u8>, Vec<u8>), &'static str> {
+    ) -> Result<([u8; 32], Vec<u8>), &'static str> {
         let mut nonce_bytes = [0u8; 24];
         OsRng.fill_bytes(&mut nonce_bytes);
         let nonce = XNonce::from(nonce_bytes);
 
         match self.cipher.encrypt(&nonce, plain_payload) {
-            Ok(ciphertext) => Ok((nonce_bytes.to_vec(), ciphertext)),
+            Ok(ciphertext) => {
+                let mut transport_nonce = [0u8; 32];
+                transport_nonce[..24].copy_from_slice(&nonce_bytes);
+                Ok((transport_nonce, ciphertext))
+            }
             Err(_) => Err("Fallo Crítico al Cifrar Payload IPv7"),
         }
     }
 
-    /// Desencripta un paquete llegado en bruto desde las profundidades del UDP
+    /// Desencripta un paquete llegado desde el transporte industrial v2.0
     pub fn decrypt_payload(
         &self,
-        nonce_bytes: &[u8],
+        nonce_bytes: &[u8; 32],
         ciphertext: &[u8],
     ) -> Result<Vec<u8>, &'static str> {
-        if nonce_bytes.len() != 24 {
-            return Err("Longitud de Nonce Inválida");
-        }
-        let nonce = XNonce::from_slice(nonce_bytes);
+        // XChaCha20 usa 24 bytes del nonce de transporte de 32 bytes
+        let nonce = XNonce::from_slice(&nonce_bytes[..24]);
         match self.cipher.decrypt(nonce, ciphertext) {
             Ok(plaintext) => Ok(plaintext),
             Err(_) => Err("Ataque o Corrupción Estructural en Cifrado"),

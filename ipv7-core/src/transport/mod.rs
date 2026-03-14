@@ -5,5 +5,6 @@ pub mod handshake;
 pub mod overlay;
 pub mod packet;
 pub mod relay;
+pub mod replay;
 pub mod session;
 pub mod virtual_adapter;
