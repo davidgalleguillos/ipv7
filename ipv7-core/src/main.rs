@@ -50,15 +50,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sessions = SessionManager::new();
     let replay_filter = ReplayFilter::new();
 
-    // FASE 19: Tarea de Mantenimiento Periódico (K-Buckets + Replay Cache)
+    // FASE 19: Tarea de Mantenimiento Periódico (K-Buckets + Replay Cache + Sesiones)
     let dht_maint = dht.clone();
     let replay_maint = replay_filter.clone();
+    let sessions_maint = sessions.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
             interval.tick().await;
             dht_maint.maintenance().await;
             replay_maint.maintenance().await;
+            sessions_maint.maintenance().await;
         }
     });
 
@@ -89,7 +91,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Desplazar el bucle de red UDP a una tarea asíncrona de fondo
         tokio::spawn(async move {
             let mut buf = [0u8; config::master::DEFAULT_PACKET_SIZE];
+            // Límite por IP: (conteo_paquetes, timestamp_segundo)
             let mut rate_limit: std::collections::HashMap<std::net::IpAddr, (usize, u64)> = std::collections::HashMap::new();
+            // Límite global: (conteo_paquetes, timestamp_segundo)
+            let mut global_rate: (usize, u64) = (0, 0);
+            // Secuencias salientes por peer destino para garantizar monotonía
+            let mut out_seq: std::collections::HashMap<[u8; 32], u64> = std::collections::HashMap::new();
 
             loop {
                 if let Ok((amt, src)) = relay.socket.recv_from(&mut buf).await {
@@ -109,6 +116,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         *count += 1;
                     }
                     if *count > 100 { // Límite de 100 pkt/sec por IP
+                        continue;
+                    }
+
+                    // 2b. RATE LIMITING GLOBAL: Cap de todo el nodo (anti-flood distribuido)
+                    if global_rate.1 != now {
+                        global_rate = (1, now);
+                    } else {
+                        global_rate.0 += 1;
+                    }
+                    if global_rate.0 > 2000 { // Límite global de 2000 pkt/sec
                         continue;
                     }
 
@@ -168,14 +185,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce);
                                             let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
+                                            let dest_id = packet.source_id;
+                                            let seq = out_seq.entry(dest_id).or_insert(0);
+                                            *seq += 1;
+                                            let pong_seq = *seq;
+
                                             let mut p_packet = Ipv7Packet {
                                                 version: 2,
                                                 source_id: *my_node_net.address.as_bytes(),
-                                                destination_id: packet.source_id,
+                                                destination_id: dest_id,
                                                 signature: vec![0u8; 64],
                                                 ttl: config::master::DEFAULT_MESSAGE_TTL,
                                                 timestamp,
-                                                sequence_number: 0, // En v2.1 implementaremos tracking de secuencia saliente
+                                                sequence_number: pong_seq,
                                                 nonce,
                                                 encrypted_payload: pong_bin,
                                             };
@@ -219,14 +241,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce);
                                     let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
+                                    let hs_dest = packet.source_id;
+                                    let seq = out_seq.entry(hs_dest).or_insert(0);
+                                    *seq += 1;
+                                    let hs_seq = *seq;
+
                                     let mut resp_packet = Ipv7Packet {
                                         version: 2,
                                         source_id: *my_node_net.address.as_bytes(),
-                                        destination_id: packet.source_id,
+                                        destination_id: hs_dest,
                                         signature: vec![0u8; 64],
                                         ttl: config::master::DEFAULT_MESSAGE_TTL,
                                         timestamp,
-                                        sequence_number: 0,
+                                        sequence_number: hs_seq,
                                         nonce,
                                         encrypted_payload: resp_bin,
                                     };
@@ -698,7 +725,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let final_raw_bytes = outer_signed.to_bytes().unwrap();
 
-        let net_relay = OverlayRelay::start_listener("0.0.0.0").await?;
         tracing::info!(
             "[🚀] Disparando Cebolla Exterior hacia el Relé IP -> {}",
             relay_address

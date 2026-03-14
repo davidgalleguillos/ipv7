@@ -15,6 +15,9 @@ pub const K_VALUE: usize = 20;
 pub const MAX_BUCKETS: usize = 256;
 /// Tiempo de vida de un nodo antes de ser considerado muerto (1 hora).
 pub const NODE_TTL_SECS: u64 = 3600;
+/// Multiplicador de candidatos para la búsqueda de nodos más cercanos.
+/// Se recolectan CANDIDATE_MULTIPLIER×K candidatos para garantizar una ordenación XOR correcta.
+const CLOSEST_PEER_CANDIDATE_MULTIPLIER: usize = 3;
 
 /// Estructura de Mensajes Orgánicos del protocolo de enrutamiento DHT.
 /// Sirven para NAT Punching (Ping/Pong) y para descubrimiento de topología (FindNode).
@@ -132,7 +135,9 @@ impl DhtRegistry {
         }
     }
 
-    /// Registra de forma asíncrona un nodo visualizado en la red (Kademlia Insert)
+    /// Registra de forma asíncrona un nodo visualizado en la red (Kademlia Insert).
+    /// Cuando el bucket está lleno se aplica la política LRU estándar: el nodo más
+    /// antiguo (front) es expulsado y el nuevo se inserta al final.
     pub async fn register_node(&self, pubkey: [u8; 32], physical_address: String) {
         if pubkey == self.local_id {
             return;
@@ -140,12 +145,15 @@ impl DhtRegistry {
 
         let idx = bucket_index(&self.local_id, &pubkey);
         let mut buckets = self.buckets.write().await;
-        
+
         let record = PeerRecord::new(pubkey, physical_address);
-        if let Some(_lru_candidate) = buckets[idx].insert(record) {
-            // TODO: En v2.2 disparar un PING al lru_candidate.
-            // Si el PING falla, remover lru_candidate e insertar el nuevo record.
-            // Por ahora, simplemente mantenemos los existentes si el bucket está lleno.
+        if let Some(lru) = buckets[idx].insert(record.clone()) {
+            // El bucket estaba lleno: expulsar el LRU e insertar el nodo nuevo.
+            // En una implementación con PING activo (v2.2) el LRU debería verificarse
+            // antes de expulsarlo; aquí aplicamos evicción directa para garantizar que
+            // los nodos que se contactan activamente tengan siempre lugar en la tabla.
+            buckets[idx].remove(&lru.id);
+            buckets[idx].entries.push_back(record);
         }
     }
 
@@ -158,37 +166,36 @@ impl DhtRegistry {
             .map(|r| r.addr.clone())
     }
 
-    /// Obtiene los K nodos más cercanos conocidos por XOR (Routing Real)
+    /// Obtiene los K nodos más cercanos conocidos por XOR (Routing Real, O(log N)).
+    /// Los candidatos se recogen expandiendo en espiral desde el bucket del target y
+    /// se ordenan por distancia XOR real antes de devolver los K mejores.
     pub async fn get_closest_peers(&self, target: &[u8; 32]) -> Vec<([u8; 32], String)> {
         let target_idx = bucket_index(&self.local_id, target);
         let buckets = self.buckets.read().await;
-        
-        let mut closest = Vec::new();
-        
-        // Empezar por el bucket del target y expandir hacia afuera
-        let mut offset = 0;
-        while closest.len() < K_VALUE && offset < MAX_BUCKETS {
-            // Revisar bucket a la derecha
+
+        // Recolectar hasta CANDIDATE_MULTIPLIER·K_VALUE candidatos para tener margen suficiente al ordenar.
+        let candidate_limit = K_VALUE * CLOSEST_PEER_CANDIDATE_MULTIPLIER;
+        let mut candidates: Vec<([u8; 32], String, [u8; 32])> = Vec::with_capacity(candidate_limit);
+
+        let mut offset = 0usize;
+        while candidates.len() < candidate_limit && offset < MAX_BUCKETS {
             if target_idx + offset < MAX_BUCKETS {
                 for entry in &buckets[target_idx + offset].entries {
-                    if closest.len() < K_VALUE {
-                        closest.push((entry.id, entry.addr.clone()));
-                    }
+                    candidates.push((entry.id, entry.addr.clone(), xor_distance(&entry.id, target)));
                 }
             }
-            
-            // Revisar bucket a la izquierda
             if offset > 0 && target_idx >= offset {
                 for entry in &buckets[target_idx - offset].entries {
-                    if closest.len() < K_VALUE {
-                        closest.push((entry.id, entry.addr.clone()));
-                    }
+                    candidates.push((entry.id, entry.addr.clone(), xor_distance(&entry.id, target)));
                 }
             }
             offset += 1;
         }
-        
-        closest
+
+        // Ordenar por distancia XOR ascendente y devolver los K más cercanos.
+        candidates.sort_unstable_by(|a, b| a.2.cmp(&b.2));
+        candidates.truncate(K_VALUE);
+        candidates.into_iter().map(|(id, addr, _)| (id, addr)).collect()
     }
 
     /// Cuántos pares conoce este nodo en total
